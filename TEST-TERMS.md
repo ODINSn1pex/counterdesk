@@ -1,6 +1,6 @@
 # Counterdesk – Test version terms and privacy notice
 
-**Version 1.0.0-beta.1**
+**Version 1.0.0-beta.2**
 
 ## 1. What this is
 Counterdesk is a customer service program for Shopify stores. This is a pre-release test version.
@@ -23,7 +23,7 @@ liability for injury to life, body or health, or liability that cannot be exclud
 - Customer cases are stored on your PC or, in team mode, in your Shopify store as data of your own Shopify app.
 - On start, Counterdesk asks GitHub (api.github.com) whether a newer version exists. GitHub receives your IP address
   and the program name, no customer or store data.
-- Links to your store and the Shopify admin open in Google Chrome or your default browser.
+- Links to your store and the Shopify admin open in the browser chosen under Settings > Links (default: your system browser).
 - The publisher of Counterdesk does not receive any of your data or your customers' data.
   You remain responsible for your customers' data under data protection law.
 - Feedback on GitHub (Issues) is public. Please never post customer data, screenshots with customer data or credentials there.

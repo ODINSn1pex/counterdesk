@@ -1,6 +1,6 @@
 # Counterdesk
 
-**Customer service desk for Shopify stores – a Windows program.** Test version 1.0.0-beta.1.
+**Customer service desk for Shopify stores – a Windows program.** Test version 1.0.0-beta.2.
 
 Find a customer, open the full customer file, read every order in detail, answer product questions,
 follow up on abandoned carts and track customer cases with notes and reply templates – alone or as a team.
@@ -21,16 +21,17 @@ English and German.
 - **Products** – all variants with price, SKU and availability.
 - **Abandoned carts** – who left what, with a link the customer can use to resume the purchase.
 - **Cases** – category, channel, status, notes; reply templates with placeholders. In team mode, cases are stored in your Shopify store and shared with everyone using the same app.
+- **Your browser** – choose which browser opens links to your store and the Shopify admin (any installed browser or a custom .exe).
 - **Large stores** – page-by-page loading and automatic handling of Shopify's rate limits.
 
 ## Get started
 
-1. Download `Counterdesk-1.0.0-beta.1-windows.zip` from [Releases](https://github.com/ODINSn1pex/counterdesk/releases), unzip, start `Counterdesk.exe`.
+1. Download `Counterdesk-1.0.0-beta.2-windows.zip` from [Releases](https://github.com/ODINSn1pex/counterdesk/releases), unzip, start `Counterdesk.exe`.
    Windows SmartScreen may warn because test versions are not signed yet: **More info → Run anyway**.
 2. Follow the built-in setup (about 10 minutes): create an app in the [Shopify Dev Dashboard](https://dev.shopify.com/dashboard), set the scopes shown in the program, install the app on your store, paste the client ID and secret.
 3. Just looking? Run `Counterdesk.exe --demo` for fictional sample data.
 
-Requirements: Windows 10/11 with Microsoft Edge. Google Chrome is optional (used for links to your store and the Shopify admin).
+Requirements: Windows 10/11 with Microsoft Edge (for the program window). Links to your store and the Shopify admin open in the browser of your choice (Settings → Links).
 
 ## Privacy in short
 
@@ -46,7 +47,7 @@ SHA-256 checksums are attached to each release (`SHA256SUMS.txt`).
 
 ## Deutsch
 
-**Kundenservice-Programm für Shopify-Shops unter Windows.** Testversion 1.0.0-beta.1, auf Englisch und Deutsch (umschaltbar oben rechts).
+**Kundenservice-Programm für Shopify-Shops unter Windows.** Testversion 1.0.0-beta.2, auf Englisch und Deutsch (umschaltbar oben rechts).
 
 Kunden finden, die ganze Kundenakte öffnen, Bestellungen im Detail lesen, Produktfragen beantworten, abgebrochene Warenkörbe nachverfolgen und Kundenanliegen mit Notizen und Textbausteinen bearbeiten – allein oder im Team.
 
