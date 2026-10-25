@@ -1,6 +1,6 @@
 # Counterdesk – Testbedingungen und Datenschutzhinweis
 
-**Version 1.0.0-beta.2**
+**Version 1.0.0-beta.3 · Herausgeber: Lindenware**
 
 ## 1. Worum es geht
 Counterdesk ist ein Kundenservice-Programm für Shopify-Shops. Dies ist eine Testversion vor der Veröffentlichung.
@@ -24,7 +24,7 @@ Das gilt nicht für Schäden an Leben, Körper oder Gesundheit und nicht, soweit
 - Beim Start fragt Counterdesk bei GitHub (api.github.com) nach, ob es eine neuere Version gibt. GitHub erhält dabei deine
   IP-Adresse und den Programmnamen, keine Kunden- oder Shopdaten.
 - Links zum Shop und zum Shopify-Admin öffnen im unter Einstellungen > Links gewählten Browser (Vorgabe: Standardbrowser des Systems).
-- Der Herausgeber von Counterdesk erhält keine deiner Daten und keine Daten deiner Kunden.
+- Lindenware, der Herausgeber von Counterdesk, erhält keine deiner Daten und keine Daten deiner Kunden.
   Für die Daten deiner Kunden bleibst du datenschutzrechtlich verantwortlich.
 - Rückmeldungen auf GitHub (Issues) sind öffentlich. Bitte dort niemals Kundendaten, Screenshots mit Kundendaten oder Zugangsdaten einstellen.
 
@@ -35,6 +35,6 @@ Counterdesk ist ein unabhängiges Programm und steht in keiner Verbindung zu Sho
 Testversionen können aufhören zu funktionieren, z. B. wenn Shopify die genutzte Schnittstellenversion abschaltet
 (2026-10, voraussichtlich etwa Oktober 2027). Die Bedingungen einer endgültigen Version können abweichen.
 
-## 7. Kontakt
-Der Herausgeber wird in der endgültigen Version genannt. Bis dahin bitte über:
+## 7. Herausgeber und Kontakt
+Counterdesk wird von Lindenware herausgegeben. Kontakt während der Testphase:
 https://github.com/ODINSn1pex/counterdesk/issues

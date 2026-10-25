@@ -1,6 +1,8 @@
 # Counterdesk
 
-**Customer service desk for Shopify stores – a Windows program.** Test version 1.0.0-beta.2.
+*by Lindenware*
+
+**Customer service desk for Shopify stores – a Windows program.** Test version 1.0.0-beta.3.
 
 Find a customer, open the full customer file, read every order in detail, answer product questions,
 follow up on abandoned carts and track customer cases with notes and reply templates – alone or as a team.
@@ -26,7 +28,7 @@ English and German.
 
 ## Get started
 
-1. Download `Counterdesk-1.0.0-beta.2-windows.zip` from [Releases](https://github.com/ODINSn1pex/counterdesk/releases), unzip, start `Counterdesk.exe`.
+1. Download `Counterdesk-1.0.0-beta.3-windows.zip` from [Releases](https://github.com/ODINSn1pex/counterdesk/releases), unzip, start `Counterdesk.exe`.
    Windows SmartScreen may warn because test versions are not signed yet: **More info → Run anyway**.
 2. Follow the built-in setup (about 10 minutes): create an app in the [Shopify Dev Dashboard](https://dev.shopify.com/dashboard), set the scopes shown in the program, install the app on your store, paste the client ID and secret.
 3. Just looking? Run `Counterdesk.exe --demo` for fictional sample data.
@@ -47,7 +49,7 @@ SHA-256 checksums are attached to each release (`SHA256SUMS.txt`).
 
 ## Deutsch
 
-**Kundenservice-Programm für Shopify-Shops unter Windows.** Testversion 1.0.0-beta.2, auf Englisch und Deutsch (umschaltbar oben rechts).
+**Kundenservice-Programm für Shopify-Shops unter Windows.** Testversion 1.0.0-beta.3, auf Englisch und Deutsch (umschaltbar oben rechts).
 
 Kunden finden, die ganze Kundenakte öffnen, Bestellungen im Detail lesen, Produktfragen beantworten, abgebrochene Warenkörbe nachverfolgen und Kundenanliegen mit Notizen und Textbausteinen bearbeiten – allein oder im Team.
 
@@ -61,4 +63,4 @@ Counterdesk hat **keinen Server**: Daten gehen nur zwischen deinem PC und deinem
 
 ---
 
-<sub>Counterdesk is an independent program and is not affiliated with or endorsed by Shopify. Shopify is a trademark of Shopify Inc.</sub>
+<sub>Counterdesk is a Lindenware program. It is independent and not affiliated with or endorsed by Shopify. Shopify is a trademark of Shopify Inc.</sub>
