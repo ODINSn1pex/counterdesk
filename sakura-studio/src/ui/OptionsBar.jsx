@@ -26,9 +26,9 @@ export function Num({ label, value, onChange, min = 0, max = 100, step = 1, unit
         onBlur={() => { const v = parseFloat(String(txt).replace(',', '.')); if (!isNaN(v)) onChange(Math.min(max, Math.max(min, v))); setTxt(null); }}
         onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); const v = Math.min(max, Math.max(min, value + (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1))); onChange(v); setTxt(String(round(v, step))); } }}
       />
-      <span className="num-pop">
-        <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
-      </span>
+      {scrub && <span className="num-pop">
+        <input type="range" min={min} max={Math.min(max, Math.max(value * 2, min + 100, Math.min(max, 500)))} step={step} value={value} onMouseDown={(e) => e.preventDefault()} onChange={(e) => onChange(Number(e.target.value))} />
+      </span>}
     </label>
   );
 }
@@ -140,7 +140,7 @@ export function OptionsBar() {
     } else body = <>
       <Check label="Autom. ausw.:" value={S.move.autoSelect} onChange={(v) => { S.move.autoSelect = v; emit(); }} />
       <Sel value="layer" onChange={() => {}} options={[['layer', 'Ebene']]} width={90} />
-      <Check label="Transformationsstrg." value={S.move.showTransform} onChange={(v) => { S.move.showTransform = v; emit(); if (v) import('../state.js').then((m) => m.startTransform()); }} />
+      <Check label="Transformationsstrg." value={!!S.transform} onChange={(v) => { if (v) import('../state.js').then((m) => m.startTransform()); }} />
       <div className="opt-sep" />
       {[['left', 'alignL'], ['hcenter', 'alignHC'], ['right', 'alignR']].map(([a, ic]) => <button key={a} className="icon-btn" title={'Ausrichten: ' + a} onClick={() => alignLayer(a)}><Icon name={ic} size={18} /></button>)}
       <div className="opt-sep" />
@@ -157,7 +157,7 @@ export function OptionsBar() {
       {t === 'marquee' && <><span className="lbl">Art:</span><Sel value={S.sel.ratio} onChange={set(S.sel, 'ratio')} options={[['free', 'Normal'], ['1', 'Festes Verhältnis 1:1'], ['1.5', '3:2'], ['1.3333', '4:3'], ['1.7778', '16:9']]} width={150} /></>}
       <div className="opt-sep" />
       <button className="btn" onClick={() => SELECT.subject()}>Motiv auswählen</button>
-      <button className="btn" onClick={() => openDialog('modifySel', { kind: 'feather' })}>Auswählen und maskieren…</button>
+      <button className="btn" onClick={() => openDialog('selectMask')}>Auswählen und maskieren…</button>
     </>;
   } else if (t === 'wand') {
     body = <>
@@ -307,6 +307,7 @@ export function OptionsBar() {
       <div className="opt-sep" />
       {body}
       <div className="ob-flex" />
+      <button className="icon-btn" title="Werkzeugeinstellungen zurücksetzen" onClick={() => import('../state.js').then((m) => m.resetToolOptions())}><Icon name="undo" size={16} /></button>
     </div>
   );
 }

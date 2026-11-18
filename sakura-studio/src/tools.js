@@ -5,21 +5,17 @@ import {
   VIEW, Layer, renderTextLayer, composite, SEL, L, maskColorIsReveal,
 } from './state.js';
 import { makeCanvas, ctx2d, cloneCanvas, clamp, dist, hexToRgb, rgbToHex, alphaBounds, rgbToHsl, hslToRgb } from './engine/util.js';
-import { gcoFor, textBounds } from './engine/doc.js';
+import { gcoFor, textBounds, getMerged } from './engine/doc.js';
 
 let T = null; // aktueller Zeiger-Vorgang
 const SPACE = { held: false };
 export { SPACE };
 
 // ---------- Hilfen ----------
-function mergedCanvas(d) {
-  const c = makeCanvas(d.w, d.h);
-  composite({ ...d, channelView: null }, c, { noChannels: true });
-  return c;
-}
+function mergedCanvas(d) { return getMerged(d); }
 
 export function sampleColor(d, p, all = true, size = 1) {
-  const src = all ? mergedCanvas(d) : d.layer.canvas;
+  const src = all ? mergedCanvas(d) : d.layers[d.active].canvas;
   const r = Math.floor(size / 2);
   const x0 = clamp(Math.floor(p.x) - r, 0, d.w - 1), y0 = clamp(Math.floor(p.y) - r, 0, d.h - 1);
   const w = Math.min(size, d.w - x0), h = Math.min(size, d.h - y0);
@@ -87,7 +83,7 @@ function beginStroke(d, e, kind) {
   if (kind === 'clone') {
     if (!S.cloneSource) { toast('Alt + Klick, um eine Quelle festzulegen'); return null; }
     if (!S.stampOpts.aligned || S.cloneOffset == null) S.cloneOffset = { x: S.cloneSource.x - e.p.x, y: S.cloneSource.y - e.p.y };
-    st.src = S.stampOpts.sampleAll ? mergedCanvas(d) : cloneCanvas(d.layer.canvas);
+    st.src = cloneCanvas(S.stampOpts.sampleAll ? mergedCanvas(d) : d.layer.canvas);
   }
   if (kind === 'heal') st.src = cloneCanvas(d.layer.canvas);
   if (kind === 'history') {
@@ -104,13 +100,23 @@ function beginStroke(d, e, kind) {
   return st;
 }
 
+function addDirty(st, x, y, r) {
+  const x0 = Math.floor(x - r - 2), y0 = Math.floor(y - r - 2), x1 = Math.ceil(x + r + 2), y1 = Math.ceil(y + r + 2);
+  const dd = st.dirty;
+  if (!dd) st.dirty = { x0, y0, x1, y1 };
+  else { if (x0 < dd.x0) dd.x0 = x0; if (y0 < dd.y0) dd.y0 = y0; if (x1 > dd.x1) dd.x1 = x1; if (y1 > dd.y1) dd.y1 = y1; }
+}
+
 function stampDab(st, x, y, pressure = 1) {
   const o = st.o;
-  let size = o.size * pressure;
+  const pSize = S.prefs.pressureSize !== false ? pressure : 1;
+  let size = Math.max(1, o.size * pSize);
+  st.curAlpha = S.prefs.pressureOpacity ? pressure : 1;
   if (o.jitter) size *= 1 - Math.random() * o.jitter;
   if (o.scatter) { x += (Math.random() - 0.5) * o.scatter * o.size * 2; y += (Math.random() - 0.5) * o.scatter * o.size * 2; }
   const sx = st.stroke; const x2 = ctx2d(sx);
   const kind = st.kind;
+  addDirty(st, x, y, size * 0.75 + 2);
   const hard = kind === 'pencil' ? 1 : o.hardness;
   const shape = kind === 'pencil' ? 'square' : o.shape || 'round';
   if (kind === 'clone' || kind === 'history' || kind === 'pattern' || kind === 'heal') {
@@ -123,13 +129,13 @@ function stampDab(st, x, y, pressure = 1) {
     else if (kind === 'history') tx.drawImage(st.src, -ox, -oy);
     else if (kind === 'pattern') { tx.fillStyle = tx.createPattern(st.pat, 'repeat'); tx.translate(-ox, -oy); tx.fillRect(ox, oy, s, s); }
     else if (kind === 'heal') healPatch(st, tx, ox, oy, s);
-    x2.globalAlpha = o.flow;
+    x2.globalAlpha = o.flow * st.curAlpha;
     x2.drawImage(tmp, ox, oy);
     x2.globalAlpha = 1;
     return;
   }
   const dab = dabCanvas(size, hard, st.color, shape, o.angle, o.roundness);
-  x2.globalAlpha = o.flow;
+  x2.globalAlpha = o.flow * st.curAlpha;
   if (kind === 'pencil') { x2.imageSmoothingEnabled = false; x2.drawImage(dab, Math.round(x - dab.width / 2), Math.round(y - dab.height / 2)); }
   else x2.drawImage(dab, x - dab.width / 2, y - dab.height / 2);
   x2.globalAlpha = 1;
@@ -182,35 +188,49 @@ function strokeTo(st, p, pressure) {
   refreshStroke(st);
 }
 
+const scratch = { c: null };
+function scratchCanvas(w, h) {
+  let c = scratch.c;
+  if (!c) c = scratch.c = makeCanvas(w, h);
+  if (c.width < w || c.height < h) { c.width = Math.max(c.width, w); c.height = Math.max(c.height, h); }
+  const x = ctx2d(c); x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over'; x.clearRect(0, 0, w, h);
+  return c;
+}
+
+// Nur den veränderten Bereich neu zeichnen → flüssiges Malen auch bei großen Bildern
 function refreshStroke(st) {
   const d = st.d, t = st.tgt;
+  const W = t.canvas.width, H = t.canvas.height;
+  const dd = st.dirty || { x0: 0, y0: 0, x1: W, y1: H };
+  st.dirty = null;
+  const rx = Math.max(0, dd.x0), ry = Math.max(0, dd.y0);
+  const rw = Math.min(W, dd.x1) - rx, rh = Math.min(H, dd.y1) - ry;
+  if (rw <= 0 || rh <= 0) return;
   const x = ctx2d(t.canvas);
-  let stroke = st.stroke;
   const sel = d.selection && !S.ui.quickMask ? d.selection : null;
-  if (sel || (t.layer && t.layer.lockAlpha && t.kind === 'pixels')) {
-    stroke = cloneCanvas(st.stroke);
-    const sx = ctx2d(stroke);
+  const lockA = t.layer && t.layer.lockAlpha && t.kind === 'pixels';
+  // Strich-Ausschnitt vorbereiten (Auswahl / Transparenz fixieren / Farbe ersetzen)
+  const sc = scratchCanvas(rw, rh); const sx = ctx2d(sc);
+  sx.drawImage(st.stroke, rx, ry, rw, rh, 0, 0, rw, rh);
+  if (sel || lockA || st.kind === 'replace') {
     sx.globalCompositeOperation = 'destination-in';
-    if (sel) sx.drawImage(sel, 0, 0);
-    if (t.layer && t.layer.lockAlpha && t.kind === 'pixels') sx.drawImage(st.before, 0, 0);
+    if (sel) sx.drawImage(sel, rx, ry, rw, rh, 0, 0, rw, rh);
+    if (lockA || st.kind === 'replace') sx.drawImage(st.before, rx, ry, rw, rh, 0, 0, rw, rh);
+    sx.globalCompositeOperation = 'source-over';
   }
   x.save();
-  x.clearRect(0, 0, t.canvas.width, t.canvas.height);
-  x.drawImage(st.before, 0, 0);
+  x.clearRect(rx, ry, rw, rh);
+  x.drawImage(st.before, rx, ry, rw, rh, rx, ry, rw, rh);
   x.globalAlpha = st.o.opacity;
   if (t.kind === 'mask') x.globalCompositeOperation = st.reveal ? 'source-over' : 'destination-out';
   else if (st.kind === 'eraser' && !t.layer.isBackground) x.globalCompositeOperation = 'destination-out';
   else if (st.kind === 'replace') x.globalCompositeOperation = 'color';
-  else x.globalCompositeOperation = t.layer.lockAlpha ? 'source-atop' : gcoFor(st.o.mode || 'normal');
-  if (st.kind === 'replace') {
-    // Farbe ersetzen: nur deckende Pixel einfärben
-    const s2 = cloneCanvas(stroke); const s2x = ctx2d(s2); s2x.globalCompositeOperation = 'destination-in'; s2x.drawImage(st.before, 0, 0); stroke = s2;
-  }
-  x.drawImage(stroke, 0, 0);
+  else x.globalCompositeOperation = lockA ? 'source-atop' : gcoFor(st.o.mode || 'normal');
+  x.drawImage(sc, 0, 0, rw, rh, rx, ry, rw, rh);
   x.restore();
   if (t.layer) t.layer.touch();
-  if (t.kind === 'mask' && !t.layer) d.selRev++;
-  view.request();
+  if (t.kind === 'mask' && !t.layer) { d.selRev++; view.request(); }
+  else view.requestRect({ x: rx, y: ry, w: rw, h: rh });
 }
 
 // ---------- Lokale Pixel-Werkzeuge (Weichzeichnen, Abwedeln …) ----------
@@ -233,6 +253,7 @@ function localOp(d, layer, p, size, fn) {
   fn(id, w, h, weight, x0, y0);
   cx.putImageData(id, x0, y0);
   layer.touch();
+  view.requestRect({ x: x0, y: y0, w, h });
 }
 
 function blurDab(d, layer, p, strength, sharpen) {
@@ -300,7 +321,9 @@ function smudgeDab(st, p) {
 
 function bgEraserDab(st, p) {
   const d = st.d, layer = st.layer;
-  const c = sampleColor({ ...d, layers: [layer] }, p, false, 1) || '#000000';
+  const px = ctx2d(layer.canvas).getImageData(clamp(Math.floor(p.x), 0, d.w - 1), clamp(Math.floor(p.y), 0, d.h - 1), 1, 1).data;
+  const c = px[3] ? rgbToHex(px[0], px[1], px[2]) : (st.lastColor || '#000000');
+  st.lastColor = c;
   const { r, g, b } = hexToRgb(st.sampleOnce ? st.sampleOnce : c);
   if (!st.sampleOnce) st.sampleOnce = S.eraser.sampling === 'once' ? c : null;
   const tol = S.eraser.tolerance * 2.55;
@@ -603,7 +626,7 @@ export function pointerMove(e) {
       strokeTo(st, q, e.pressure);
       break;
     }
-    case 'bgerase': interp(T.st, p, S.eraser.size * 0.25, (q) => bgEraserDab(T.st, q)); view.request(); break;
+    case 'bgerase': interp(T.st, p, S.eraser.size * 0.25, (q) => bgEraserDab(T.st, q)); break;
     case 'retouch': interp(T.st, p, S.retouch.size * 0.2, (q) => retouchAt(T, q)); break;
     case 'gradient': {
       T.b = e.shift ? snapAngle(T.a, p) : p;
@@ -753,7 +776,6 @@ function retouchAt(t, p) {
   else if (t.mode === 'sharpen') blurDab(d, layer, p, S.retouch.strength * 0.5, true);
   else if (t.mode === 'smudge') smudgeDab(t.st, p);
   else toneDab(d, layer, p, t.mode);
-  view.request();
 }
 
 function bucketFill(d, p) {
@@ -828,7 +850,7 @@ function moveDrag(d, e) {
   let dx = Math.round(e.p.x - T.a.x), dy = Math.round(e.p.y - T.a.y);
   if (e.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
   // Einrasten an Hilfslinien / Mitte
-  if (S.ui.snap && !T.float) {
+  if (S.ui.snap && !T.float && !e.noSnap) {
     const b = T.bounds || (T.bounds = alphaBounds(T.before));
     if (b) {
       const snapPos = [0, d.w / 2, d.w, ...d.guides.filter((g) => g.dir === 'v').map((g) => g.pos)];
@@ -861,7 +883,7 @@ export function nudge(dx, dy) {
   T = null;
   moveDown(d, { p: { x: 0, y: 0 } });
   if (!T) return;
-  moveDrag(d, { p: { x: dx, y: dy } });
+  moveDrag(d, { p: { x: dx, y: dy }, noSnap: true });
   T = null;
   commit('Verschieben');
 }
@@ -918,7 +940,8 @@ function transformDrag(e) {
     let sx = s.sx, sy = s.sy;
     if (e.alt) { if (hx) sx = (ux * hx * 2) / s.w; if (hy) sy = (uy * hy * 2) / s.h; }
     else { if (hx) sx = ((ux - ax) * hx) / s.w; if (hy) sy = ((uy - ay) * hy) / s.h; }
-    if (e.shift && hx && hy) { const k = Math.max(Math.abs(sx / s.sx), Math.abs(sy / s.sy)); sx = Math.sign(sx) * Math.abs(s.sx) * k; sy = Math.sign(sy) * Math.abs(s.sy) * k; }
+    const prop = S.prefs.proportionalTransform !== false ? !e.shift : e.shift;
+    if (prop && hx && hy) { const k = Math.max(Math.abs(sx / s.sx), Math.abs(sy / s.sy)); sx = Math.sign(sx) * Math.abs(s.sx) * k; sy = Math.sign(sy) * Math.abs(s.sy) * k; }
     let ncx = 0, ncy = 0;
     if (!e.alt) { if (hx) ncx = ax + hx * s.w * sx / 2; if (hy) ncy = ay + hy * s.h * sy / 2; }
     const c2 = Math.cos(s.rot), s2 = Math.sin(s.rot);

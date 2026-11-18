@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
-import { S, emit, useStore, LS, doc, addDoc, setTool } from '../state.js';
+import { S, emit, useStore, LS, doc, addDoc, setTool, isAnime, savePrefs } from '../state.js';
 import { docFromImage } from '../engine/doc.js';
 import { loadImage } from '../engine/util.js';
 import { Blossom, Logo } from './icons.jsx';
 
 const STEPS = [
-  { title: 'Willkommen bei Sakura Studio 🌸', text: 'Schön, dass du da bist! Diese kurze Tour zeigt dir in 12 Schritten, wo alles ist. Du kannst sie jederzeit über „Hilfe › Tutorial starten“ wiederholen.', target: null, prep: 'sample' },
+  { title: 'Willkommen bei Sakura Studio 🌸', text: 'Schön, dass du da bist! Diese kurze Tour zeigt dir in 13 Schritten, wo alles ist. Du kannst sie jederzeit über „Hilfe › Tutorial starten“ wiederholen.', target: null, prep: 'sample' },
   { title: 'Die Menüleiste', text: 'Hier findest du alle Befehle: Datei (Öffnen, Speichern, PSD, Export), Bearbeiten, Bild (Korrekturen, Bildgröße), Ebene, Schrift, Auswahl, Filter, Ansicht, Fenster und Hilfe. Fast jeder Befehl hat ein Tastenkürzel – es steht rechts im Menü.', target: 'menu' },
   { title: 'Die Werkzeugleiste', text: 'Links liegen alle Werkzeuge. Ein kleines Dreieck in der Ecke bedeutet: hier gibt es mehr! Halte die Maustaste gedrückt oder klicke mit rechts, um z. B. vom Pinsel zum Buntstift zu wechseln. Jedes Werkzeug hat einen Buchstaben (B = Pinsel, V = Verschieben …).', target: 'tools' },
   { title: 'Vorder- & Hintergrundfarbe', text: 'Die zwei Farbfelder unten in der Werkzeugleiste. Klicke darauf für den Farbwähler. X tauscht beide Farben, D setzt Schwarz/Weiß. Mit Alt + Klick im Bild nimmst du beim Malen eine Farbe auf.', target: 'colors' },
@@ -16,6 +16,7 @@ const STEPS = [
   { title: 'Eigenschaften & Korrekturen', text: 'Hier siehst du die Leinwandgröße deines Dokuments. Im Reiter „Korrekturen“ wendest du per Klick Helligkeit/Kontrast, Gradationskurven, Farbton/Sättigung u. v. m. an – mit Live-Vorschau.', target: 'panel-props' },
   { title: 'Protokoll, Navigator & mehr', text: 'Diese schmale Leiste öffnet weitere Bedienfelder: Protokoll (jeden Schritt zurückspringen), Navigator, Info mit Histogramm, Pinselvorgaben, Zeichen und Absatz.', target: 'side' },
   { title: 'Rückgängig & Speichern', text: 'Strg + Z macht rückgängig, Umschalt + Strg + Z wiederholt. Strg + S speichert dein Projekt mit allen Ebenen (.sakura) – standardmäßig im Ordner „Desktop › Sakura Studio › Projekte“. Unter Datei kannst du auch als PSD speichern oder als PNG/JPG exportieren.', target: 'menu' },
+  { title: 'Dein Look: Themes & Einstellungen', text: 'Unter „Bearbeiten › Voreinstellungen“ (Strg+K) wählst du Dunkel, Hell, „Wie System“ oder das Anime-Theme (Sakura-Nacht / Sakura-Tag) samt Akzentfarbe. Dort stellst du auch Mausrad-Zoom, Stiftdruck, Raster, Einheiten, Autosave und mehr ein.', target: 'menu' },
   { title: 'Los geht\'s! ✨', text: 'Probier es gleich aus: Der Pinsel (B) ist aktiv – male etwas auf eine neue Ebene, wähle mit W einen Bereich aus oder öffne „Filter“. Alle Tastenkürzel findest du unter „Hilfe › Tastaturbefehle“. Viel Spaß beim Gestalten!', target: null, prep: 'layer' },
 ];
 
@@ -62,7 +63,7 @@ export function Tutorial() {
   function next() { if (i < STEPS.length - 1) setI(i + 1); else done(); }
 
   // Position der Sprechblase
-  const W = 380;
+  const W = i === 0 ? 460 : 380;
   let style;
   if (!rect) style = { left: '50%', top: '50%', transform: 'translate(-50%,-50%)' };
   else {
@@ -86,6 +87,16 @@ export function Tutorial() {
         <div className="tut-step">Schritt {i + 1} von {STEPS.length}</div>
         <h3>{step.title}</h3>
         <p>{step.text}</p>
+        {i === 0 && (
+          <div className="tut-themes">
+            <div className="tut-step">Wähle deinen Look</div>
+            <div className="theme-grid">
+              {[['dark', 'Dunkel'], ['light', 'Hell'], ['anime', 'Anime · Nacht'], ['anime-day', 'Anime · Tag']].map(([k, n]) => (
+                <button key={k} className={'theme-card t-' + k + (S.prefs.theme === k ? ' on' : '')} onClick={() => { S.prefs.theme = k; savePrefs(); }}><span className="tc-prev"><i /><i /><i /></span>{n}</button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="tut-dots">{STEPS.map((_, j) => <span key={j} className={j === i ? 'on' : j < i ? 'done' : ''} onClick={() => setI(j)} />)}</div>
         <div className="tut-foot">
           <button className="btn ghost" onClick={done}>Überspringen</button>
@@ -93,8 +104,7 @@ export function Tutorial() {
           {i > 0 && <button className="btn" onClick={() => setI(i - 1)}>Zurück</button>}
           <button className="btn primary" onClick={next}>{i === STEPS.length - 1 ? 'Loslegen' : 'Weiter'}</button>
         </div>
-        <Blossom size={34} className="tut-b1" />
-        <Blossom size={20} className="tut-b2" color="#ffd6ec" />
+        {isAnime() && <><Blossom size={34} className="tut-b1" /><Blossom size={20} className="tut-b2" color="#ffd6ec" /></>}
       </div>
     </div>
   );

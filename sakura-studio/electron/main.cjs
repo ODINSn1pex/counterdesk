@@ -3,6 +3,14 @@ const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } = require('ele
 const path = require('path');
 const fs = require('fs');
 
+// Einstellungen des Hauptprozesses (müssen vor app.ready gelesen werden)
+const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+function readSettings() { try { return JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch (e) { return {}; } }
+const mainSettings = readSettings();
+if (mainSettings.hardwareAcceleration === false) app.disableHardwareAcceleration();
+const recoveryDir = () => { const d = path.join(app.getPath('userData'), 'recovery'); fs.mkdirSync(d, { recursive: true }); return d; };
+const safeName = (n) => String(n).replace(/[^a-zA-Z0-9._-]/g, '_');
+
 let win = null;
 let allowClose = false;
 let pendingOpenPath = process.argv.find((a) => /\.(sakura|psd|png|jpe?g|webp|gif|bmp)$/i.test(a)) || null;
@@ -30,6 +38,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
+      backgroundThrottling: false,
     },
   });
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
@@ -71,7 +80,11 @@ ipcMain.handle('win', (_e, cmd) => {
   return win.isMaximized();
 });
 
-ipcMain.handle('confirm-close', () => { allowClose = true; if (win) win.close(); });
+ipcMain.handle('confirm-close', () => {
+  allowClose = true;
+  try { for (const f of fs.readdirSync(recoveryDir())) fs.unlinkSync(path.join(recoveryDir(), f)); } catch (e) { /* */ }
+  if (win) win.close();
+});
 ipcMain.handle('work-folder', () => workFolder());
 ipcMain.handle('pending-open', () => { const p = pendingOpenPath; pendingOpenPath = null; return p; });
 
@@ -102,6 +115,27 @@ ipcMain.handle('save-dialog', async (_e, opts) => {
 
 ipcMain.handle('write-file', (_e, p, data) => {
   fs.writeFileSync(p, Buffer.from(data));
+  return true;
+});
+
+ipcMain.handle('choose-folder', async (_e, opts = {}) => {
+  const r = await dialog.showOpenDialog(win, { title: opts.title || 'Ordner wählen', defaultPath: opts.defaultPath || workFolder(), properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
+});
+ipcMain.handle('write-file-in', (_e, dir, name, data) => {
+  const p = path.join(dir, path.basename(name));
+  fs.writeFileSync(p, Buffer.from(data));
+  return p;
+});
+ipcMain.handle('recovery-write', (_e, name, data) => { fs.writeFileSync(path.join(recoveryDir(), safeName(name)), Buffer.from(data)); return true; });
+ipcMain.handle('recovery-delete', (_e, name) => { try { fs.unlinkSync(path.join(recoveryDir(), safeName(name))); } catch (e) { /* nicht vorhanden */ } return true; });
+ipcMain.handle('recovery-list', () => {
+  try { return fs.readdirSync(recoveryDir()).filter((f) => f.endsWith('.sakura')).map((f) => ({ name: f, data: fs.readFileSync(path.join(recoveryDir(), f)) })); } catch (e) { return []; }
+});
+ipcMain.handle('recovery-clear', () => { try { for (const f of fs.readdirSync(recoveryDir())) fs.unlinkSync(path.join(recoveryDir(), f)); } catch (e) { /* */ } return true; });
+ipcMain.handle('set-main-setting', (_e, key, value) => {
+  const cur = readSettings(); cur[key] = value;
+  fs.writeFileSync(settingsFile(), JSON.stringify(cur, null, 2));
   return true;
 });
 

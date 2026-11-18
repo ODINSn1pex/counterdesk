@@ -1,4 +1,4 @@
-import { S, useStore, openDialog, openFile, openRecent, newDocument, addDoc, emit } from '../state.js';
+import { S, useStore, openDialog, openFile, openRecent, newDocument, addDoc, emit, isAnime, openBytes } from '../state.js';
 import { docFromImage } from '../engine/doc.js';
 import { loadImage } from '../engine/util.js';
 import { Blossom, Icon, Logo } from './icons.jsx';
@@ -6,9 +6,9 @@ import { Blossom, Icon, Logo } from './icons.jsx';
 export function Welcome() {
   useStore();
   const openSample = async () => { const img = await loadImage('./sample.jpg'); addDoc(docFromImage(img, 'Sakura-Beispiel.jpg')); };
-  const petals = S.prefs.sakuraPetals !== false;
+  const petals = isAnime() && S.prefs.sakuraPetals !== false && !S.prefs.reduceMotion;
   return (
-    <div className="welcome">
+    <div className="welcome" onDragOver={(e) => e.preventDefault()} onDrop={async (e) => { e.preventDefault(); for (const f of e.dataTransfer.files) await openBytes(f.name, new Uint8Array(await f.arrayBuffer()), (window.native && window.native.pathForFile && window.native.pathForFile(f)) || null); }}>
       {petals && <div className="petals" aria-hidden="true">{Array.from({ length: 16 }).map((_, i) => <Blossom key={i} size={10 + (i % 4) * 5} className="petal" style={{ left: `${(i * 61) % 100}%`, animationDelay: `${(i * 1.3) % 9}s`, animationDuration: `${9 + (i % 5) * 2}s` }} />)}</div>}
       <div className="welcome-card">
         <div className="wl-head"><Logo size={54} /><div><h1>Sakura Studio</h1><div className="muted">Willkommen zurück – was möchtest du heute gestalten?</div></div></div>
@@ -28,7 +28,7 @@ export function Welcome() {
           <h4>Zuletzt verwendet</h4>
           <div className="wl-recent">{S.recent.map((p) => <button key={p} onClick={() => openRecent(p)} title={p}><Icon name="doc" size={15} /> {p.split(/[\\/]/).pop()}<span className="muted">{p}</span></button>)}</div>
         </>}
-        <div className="wl-tip"><Blossom size={16} /> Tipp: Ziehe Bilder oder PSD-Dateien direkt in dieses Fenster.</div>
+        <div className="wl-tip">{isAnime() && <Blossom size={16} />} Tipp: Ziehe Bilder oder PSD-Dateien direkt in dieses Fenster.</div>
       </div>
     </div>
   );

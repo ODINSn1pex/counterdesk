@@ -1,6 +1,6 @@
 // Globaler Zustand + Aktionen
 import { useSyncExternalStore } from 'react';
-import { Doc, Layer, createDoc, docFromImage, composite, flattenToCanvas, renderTextLayer, layerProps, applyLayerProps } from './engine/doc.js';
+import { Doc, Layer, createDoc, docFromImage, composite, flattenToCanvas, renderTextLayer, layerProps, applyLayerProps, getMerged } from './engine/doc.js';
 import { makeCanvas, ctx2d, cloneCanvas, alphaBounds, loadImage, canvasToBytes, hexToRgb, luminance } from './engine/util.js';
 import * as SEL from './engine/selection.js';
 import { readPsd, writePsd } from './io/psd.js';
@@ -35,6 +35,24 @@ export const DEFAULT_SWATCHES = [
 
 export const PATTERNS = ['sakura', 'checker', 'dots', 'stripes', 'grid', 'waves', 'stars', 'hearts'];
 
+export const DEFAULT_PREFS = {
+  // Allgemein
+  showWelcome: true, recentCount: 10, autoSaveMin: 3, historyStates: 60, confirmClose: true,
+  // Oberfläche
+  theme: 'dark', accent: 'auto', uiScale: 1, reduceMotion: false, sakuraPetals: true, thumbSize: 'medium', tooltips: true,
+  // Werkzeuge
+  wheelZoom: false, animatedZoom: true, brushCursor: 'normal', pressureSize: true, pressureOpacity: false,
+  proportionalTransform: true, nudgeStep: 10, snapDistance: 6,
+  // Leistung
+  fastPreview: true, hardwareAcceleration: true,
+  // Transparenz & Raster
+  checker: 'medium', checkerTone: 'light', gridSpacing: 50, gridSub: 4, gridColor: '#ff9ad5', guideColor: '#3ce0ff', pixelGrid: true,
+  // Einheiten
+  units: 'px', defaultPpi: 72,
+  // Dateien
+  saveDir: '', exportFormat: 'png', jpgQuality: 90,
+};
+
 export const S = {
   docs: [],
   activeId: null,
@@ -60,7 +78,7 @@ export const S = {
   swatches: LS.get('swatches', null) || DEFAULT_SWATCHES,
   recentColors: LS.get('recentColors', []),
   recent: LS.get('recent', []),
-  prefs: LS.get('prefs', { units: 'px', historyStates: 60, checker: 'medium', uiScale: 1, autoSaveMin: 0, sakuraPetals: true }),
+  prefs: { ...DEFAULT_PREFS, ...LS.get('prefs', {}) },
   ui: {
     dialog: null,
     menu: null,
@@ -88,6 +106,27 @@ export const S = {
 // Dokument-bezogene Zustände
 S.cropState = null;
 
+// Standardwerte der Werkzeugoptionen (für „Zurücksetzen“)
+const TOOL_DEFAULTS = JSON.parse(JSON.stringify({ brush: S.brush, eraser: S.eraser, pencil: S.pencil, stampOpts: S.stampOpts, retouch: S.retouch, heal: S.heal, sel: S.sel, fill: S.fill, gradient: S.gradient, text: S.text, shape: S.shape, move: S.move, eyedrop: S.eyedrop, crop: S.crop }));
+const TOOL_KEYS_FOR = { brush: ['brush', 'pencil'], eraser: ['eraser'], stamp: ['brush', 'stampOpts'], history: ['brush'], heal: ['heal'], blur: ['retouch'], dodge: ['retouch'], marquee: ['sel'], lasso: ['sel'], wand: ['sel', 'brush'], gradient: ['gradient', 'fill'], type: ['text'], shape: ['shape'], move: ['move'], eyedropper: ['eyedrop'], crop: ['crop'] };
+export function resetToolOptions(all = false) {
+  const keys = all ? Object.keys(TOOL_DEFAULTS) : (TOOL_KEYS_FOR[S.tool] || []);
+  keys.forEach((k) => { S[k] = JSON.parse(JSON.stringify(TOOL_DEFAULTS[k])); });
+  toast(all ? 'Alle Werkzeuge zurückgesetzt' : 'Werkzeug zurückgesetzt');
+  view.overlay(); emit();
+}
+
+Doc.maxHistory = S.prefs.historyStates || 60;
+
+// Eigener, leichter Kanal für Mausposition (verhindert Neurendern der ganzen Oberfläche)
+const cursorListeners = new Set();
+let cursorVersion = 0;
+export function emitCursor() { cursorVersion++; cursorListeners.forEach((l) => l()); }
+export function useCursor() {
+  useSyncExternalStore((fn) => { cursorListeners.add(fn); return () => cursorListeners.delete(fn); }, () => cursorVersion);
+  return S.cursor;
+}
+
 export function emit() {
   version++;
   S.version = version;
@@ -99,7 +138,23 @@ export function useStore() { useSyncExternalStore(subscribe, () => version); ret
 export function doc() { return S.docs.find((d) => d.id === S.activeId) || null; }
 
 // Neuzeichnen anfordern (Canvas-Ansicht hört darauf)
-export const view = { needs: true, compositeDirty: true, request() { this.needs = true; this.compositeDirty = true; }, overlay() { this.needs = true; } };
+export const view = {
+  needs: true, compositeDirty: true, full: true, rect: null,
+  // komplettes Neuzusammensetzen
+  request() { this.needs = true; this.compositeDirty = true; this.full = true; this.rect = null; },
+  // nur einen Bildausschnitt neu zusammensetzen (Malen)
+  requestRect(r) {
+    this.needs = true; this.compositeDirty = true;
+    if (this.full) return;
+    if (!this.rect) this.rect = { ...r };
+    else {
+      const x0 = Math.min(this.rect.x, r.x), y0 = Math.min(this.rect.y, r.y);
+      const x1 = Math.max(this.rect.x + this.rect.w, r.x + r.w), y1 = Math.max(this.rect.y + this.rect.h, r.y + r.h);
+      this.rect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    }
+  },
+  overlay() { this.needs = true; },
+};
 
 export function toast(msg, ms = 2200) {
   S.ui.toast = { msg, id: Math.random() };
@@ -143,7 +198,9 @@ export function addDoc(d) {
 
 export function newDocument(opts) {
   const n = S.docs.length + 1;
-  addDoc(createDoc({ name: opts.name || `Unbenannt-${n}`, ...opts }));
+  const d = createDoc({ name: opts.name || `Unbenannt-${n}`, ...opts });
+  d.ppi = opts.ppi || S.prefs.defaultPpi || 72;
+  addDoc(d);
 }
 
 export function closeDoc(id, force = false) {
@@ -154,6 +211,7 @@ export function closeDoc(id, force = false) {
     emit();
     return;
   }
+  clearRecovery(d);
   S.docs = S.docs.filter((x) => x.id !== id);
   if (S.activeId === id) S.activeId = S.docs.length ? S.docs[S.docs.length - 1].id : null;
   if (!S.docs.length) S.ui.welcome = true;
@@ -176,7 +234,7 @@ function mimeFor(name) {
 
 function addRecent(p) {
   if (!p) return;
-  S.recent = [p, ...S.recent.filter((x) => x !== p)].slice(0, 10);
+  S.recent = [p, ...S.recent.filter((x) => x !== p)].slice(0, S.prefs.recentCount || 10);
   LS.set('recent', S.recent);
 }
 
@@ -217,7 +275,7 @@ function pickFileBrowser(accept, multi) {
 
 export async function openFile() {
   let files;
-  if (window.native) files = await window.native.openDialog({ title: 'Öffnen', filters: IMG_FILTERS, multi: true });
+  if (window.native) files = await window.native.openDialog({ title: 'Öffnen', filters: IMG_FILTERS, multi: true, defaultPath: S.prefs.saveDir || undefined });
   else files = await pickFileBrowser('.sakura,.psd,image/*', true);
   for (const f of files) await openBytes(f.name, new Uint8Array(f.data), f.path);
 }
@@ -253,7 +311,7 @@ export function placeImage(img, name = 'Platziert') {
 
 async function saveBytes(name, bytes, filters, existingPath) {
   if (window.native) {
-    const p = existingPath || await window.native.saveDialog({ name, filters });
+    const p = existingPath || await window.native.saveDialog({ name, filters, dir: S.prefs.saveDir || undefined });
     if (!p) return null;
     await window.native.writeFile(p, bytes);
     return p;
@@ -276,6 +334,7 @@ export async function saveProject(saveAs = false) {
   d.filePath = p;
   d.name = p.split(/[\\/]/).pop();
   d.dirty = false;
+  clearRecovery(d);
   addRecent(p);
   toast('Gespeichert: ' + d.name);
   emit();
@@ -309,9 +368,23 @@ export async function exportImage(fmt = 'png', quality = 0.92, scale = 1, transp
 
 export async function exportLayers() {
   const d = doc(); if (!d) return;
+  const base = d.name.replace(/\.[^.]+$/, '');
+  const safe = (n) => n.replace(/[\\/:*?"<>|]/g, '_');
+  if (window.native) {
+    const dir = await window.native.chooseFolder({ title: 'Zielordner für Ebenen wählen', defaultPath: S.prefs.saveDir || undefined });
+    if (!dir) return;
+    let i = 0;
+    for (const l of d.layers) {
+      i++;
+      const bytes = await canvasToBytes(l.canvas, 'image/png');
+      await window.native.writeFileIn(dir, `${safe(base)}_${String(i).padStart(2, '0')}_${safe(l.name)}.png`, bytes);
+    }
+    toast(`${d.layers.length} Ebenen exportiert`);
+    return;
+  }
   for (const l of d.layers) {
     const bytes = await canvasToBytes(l.canvas, 'image/png');
-    const p = await saveBytes(`${d.name.replace(/\.[^.]+$/, '')}_${l.name}.png`, bytes, [{ name: 'PNG', extensions: ['png'] }]);
+    const p = await saveBytes(`${safe(base)}_${safe(l.name)}.png`, bytes, [{ name: 'PNG', extensions: ['png'] }]);
     if (!p) break;
   }
 }
@@ -561,13 +634,11 @@ export const SELECT = {
   },
   subject: () => {
     const d = doc(); if (!d) return;
-    const c = makeCanvas(d.w, d.h); composite({ ...d, channelView: null }, c, { noChannels: true });
-    d.setSelection(SEL.selectSubject(c)); commit('Motiv auswählen');
+    d.setSelection(SEL.selectSubject(getMerged(d))); commit('Motiv auswählen');
   },
   colorRange: (hex, fuzz) => {
     const d = doc(); if (!d) return;
-    const c = makeCanvas(d.w, d.h); composite({ ...d, channelView: null }, c, { noChannels: true });
-    d.setSelection(SEL.colorRange(c, hex, fuzz)); commit('Farbbereich');
+    d.setSelection(SEL.colorRange(getMerged(d), hex, fuzz)); commit('Farbbereich');
   },
   save: (name) => { const d = doc(); if (!d || !d.selection) return; d.alphaChannels.push({ name: name || `Alpha ${d.alphaChannels.length + 1}`, canvas: cloneCanvas(d.selection) }); commit('Auswahl speichern'); },
   load: (i) => { const d = doc(); const a = d && d.alphaChannels[i]; if (!a) return; d.setSelection(cloneCanvas(a.canvas)); commit('Auswahl laden'); },
@@ -587,8 +658,8 @@ export function selectionOrAll(d) {
 }
 
 export const EDIT = {
-  undo: () => { const d = doc(); if (!d) return; cancelTransform(); d.undo(); view.request(); emit(); },
-  redo: () => { const d = doc(); if (!d) return; d.redo(); view.request(); emit(); },
+  undo: () => { const d = doc(); if (!d) return; if (S.ui.textEdit) finishTextEdit(); cancelTransform(); d.undo(); view.request(); emit(); },
+  redo: () => { const d = doc(); if (!d) return; if (S.ui.textEdit) finishTextEdit(); cancelTransform(); d.redo(); view.request(); emit(); },
   copy: async (merged = false) => {
     const d = doc(); if (!d) return;
     const src = merged ? flattenToCanvas(d) : d.layer.canvas;
@@ -729,7 +800,7 @@ export const IMAGE = {
     w = Math.round(w); h = Math.round(h);
     const scale = (c) => { const n = makeCanvas(w, h); const x = ctx2d(n); x.imageSmoothingEnabled = method !== 'nearest'; x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, w, h); return n; };
     d.layers.forEach((l) => {
-      if (l.type === 'text') { const k = w / d.w; l.text.x *= k; l.text.y *= w / d.w; l.text.size *= k; }
+      if (l.type === 'text') { const kx = w / d.w, ky = h / d.h; l.text.x *= kx; l.text.y *= ky; l.text.size *= Math.sqrt(kx * ky); }
       l.canvas = scale(l.canvas); if (l.mask) l.mask = scale(l.mask); l.touch();
       if (l.type === 'text') renderTextLayer(l, w, h);
     });
@@ -851,7 +922,7 @@ export function startTransform() {
   const base = cloneCanvas(before);
   const bx = ctx2d(base);
   if (d.selection) { bx.globalCompositeOperation = 'destination-out'; bx.drawImage(d.selection, 0, 0); } else bx.clearRect(0, 0, d.w, d.h);
-  S.transform = { layer: l, before, base, piece, w: b.w, h: b.h, cx: b.x + b.w / 2, cy: b.y + b.h / 2, sx: 1, sy: 1, rot: 0, skx: 0, hadSel: !!d.selection };
+  S.transform = { layer: l, before, base, piece, w: b.w, h: b.h, cx: b.x + b.w / 2, cy: b.y + b.h / 2, cx0: b.x + b.w / 2, cy0: b.y + b.h / 2, sx: 1, sy: 1, rot: 0, skx: 0, hadSel: !!d.selection, maskBefore: l.mask && !d.selection ? cloneCanvas(l.mask) : null };
   if (S.tool !== 'move') S.tool = 'move';
   renderTransform();
   emit();
@@ -867,6 +938,12 @@ export function renderTransform() {
   x.imageSmoothingQuality = 'high';
   x.drawImage(t.piece, -t.w / 2, -t.h / 2);
   x.restore();
+  if (t.maskBefore && t.layer.mask) {
+    const mx = ctx2d(t.layer.mask);
+    mx.save(); mx.setTransform(1, 0, 0, 1, 0, 0); mx.clearRect(0, 0, t.layer.mask.width, t.layer.mask.height);
+    mx.translate(t.cx, t.cy); mx.rotate(t.rot); mx.transform(1, 0, Math.tan(t.skx || 0), 1, 0, 0); mx.scale(t.sx, t.sy); mx.translate(-t.cx0, -t.cy0);
+    mx.drawImage(t.maskBefore, 0, 0); mx.restore();
+  }
   t.layer.touch();
   view.request();
 }
@@ -888,7 +965,9 @@ export function applyTransform() {
 
 export function cancelTransform() {
   const t = S.transform; if (!t) return;
-  const x = t.layer.ctx; x.clearRect(0, 0, t.layer.canvas.width, t.layer.canvas.height); x.drawImage(t.before, 0, 0); t.layer.touch();
+  const x = t.layer.ctx; x.clearRect(0, 0, t.layer.canvas.width, t.layer.canvas.height); x.drawImage(t.before, 0, 0);
+  if (t.maskBefore && t.layer.mask) { const mx = ctx2d(t.layer.mask); mx.clearRect(0, 0, t.layer.mask.width, t.layer.mask.height); mx.drawImage(t.maskBefore, 0, 0); }
+  t.layer.touch();
   S.transform = null;
   view.request(); emit();
 }
@@ -921,18 +1000,22 @@ export function finishTextEdit() {
 
 // ---------------- Ansicht ----------------
 export const VIEW = {
-  zoomBy: (f, cx, cy) => {
+  // Zoom um einen Bildschirmpunkt (relativ zur Mitte), sanft animiert
+  zoomBy: (f, cx = 0, cy = 0, dur) => {
     const d = doc(); if (!d) return;
-    const nz = Math.min(64, Math.max(0.02, d.zoom * f));
-    if (cx != null) {
-      // um Punkt zoomen: Bildschirmkoordinaten relativ zur Mitte
-      d.panX = cx - (cx - d.panX) * (nz / d.zoom);
-      d.panY = cy - (cy - d.panY) * (nz / d.zoom);
-    }
-    d.zoom = nz; view.request(); emit();
+    const a = view.anim && view.anim.doc === d ? view.anim : null;
+    const z0 = a ? a.z1 : d.zoom, px0 = a ? a.px1 : d.panX, py0 = a ? a.py1 : d.panY;
+    const nz = Math.min(64, Math.max(0.02, z0 * f));
+    VIEW.zoomTo(nz, cx - (cx - px0) * (nz / z0), cy - (cy - py0) * (nz / z0), dur);
   },
-  fit: () => { const d = doc(); if (d) { d.needsFit = true; view.request(); emit(); } },
-  actual: () => { const d = doc(); if (d) { d.zoom = 1; d.panX = 0; d.panY = 0; view.request(); emit(); } },
+  zoomTo: (z, px, py, dur = 140) => {
+    const d = doc(); if (!d) return;
+    if (!S.prefs.animatedZoom || S.prefs.reduceMotion || dur === 0) { view.anim = null; d.zoom = z; d.panX = px; d.panY = py; view.request(); emit(); return; }
+    view.anim = { doc: d, t0: performance.now(), dur, z0: d.zoom, z1: z, px0: d.panX, px1: px, py0: d.panY, py1: py };
+    view.request();
+  },
+  fit: () => { const d = doc(); if (!d) return; const f = view.fitZoom ? view.fitZoom(d) : null; if (f) VIEW.zoomTo(f, 0, 0, 200); else { d.needsFit = true; view.request(); emit(); } },
+  actual: () => { const d = doc(); if (d) VIEW.zoomTo(1, 0, 0, 200); },
   toggle: (k) => { S.ui[k] = !S.ui[k]; if (k === 'showRulers') LS.set('rulers', S.ui[k]); view.request(); emit(); },
   addGuide: (dir, pos) => { const d = doc(); if (!d) return; d.guides.push({ dir, pos }); view.request(); emit(); },
   clearGuides: () => { const d = doc(); if (!d) return; d.guides = []; view.request(); emit(); },
@@ -941,7 +1024,68 @@ export const VIEW = {
 export function openDialog(type, data = {}) { finishTextEdit(); S.ui.dialog = { type, ...data }; S.ui.menu = null; emit(); }
 export function closeDialog() { S.ui.dialog = null; emit(); }
 
-export function savePrefs() { LS.set('prefs', S.prefs); emit(); }
+export function savePrefs() {
+  LS.set('prefs', S.prefs);
+  Doc.maxHistory = S.prefs.historyStates || 60;
+  applyTheme();
+  view.colors = null; view.request();
+  emit();
+}
+
+// ---------------- Themes ----------------
+export const ACCENTS = {
+  blue: ['#4c9dff', '#8cc0ff', '#2f6fd1'], pink: ['#ec8fc4', '#f7b6da', '#c45a98'], violet: ['#a78bfa', '#c9b8ff', '#7c5bd6'],
+  teal: ['#2dd4bf', '#7ee8db', '#159e8e'], orange: ['#ff9f43', '#ffc58a', '#d9771e'], green: ['#4ade80', '#93f0b5', '#22a35a'], red: ['#ff6b81', '#ffa3b0', '#d93a52'],
+};
+export function resolvedTheme() {
+  const t = S.prefs.theme || 'dark';
+  if (t === 'system') return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  return t;
+}
+export function isAnime() { return resolvedTheme().startsWith('anime'); }
+export function applyTheme() {
+  const root = document.documentElement;
+  const t = resolvedTheme();
+  root.dataset.theme = t;
+  root.classList.toggle('reduce-motion', !!S.prefs.reduceMotion);
+  const acc = S.prefs.accent === 'auto' ? (t.startsWith('anime') ? 'pink' : 'blue') : S.prefs.accent;
+  const [a, a2, a3] = ACCENTS[acc] || ACCENTS.blue;
+  root.style.setProperty('--accent', a);
+  root.style.setProperty('--accent-2', a2);
+  root.style.setProperty('--accent-deep', a3);
+  const { r, g, b } = hexToRgb(a);
+  root.style.setProperty('--accent-glow', `rgba(${r},${g},${b},0.35)`);
+  root.style.setProperty('--accent-soft', `rgba(${r},${g},${b},0.16)`);
+  root.style.setProperty('--accent-mid', `rgba(${r},${g},${b},0.3)`);
+  if (window.native && window.native.setZoom) window.native.setZoom(S.prefs.uiScale || 1);
+}
+
+// ---------------- Wiederherstellung (Autosave) ----------------
+export async function autosaveAll() {
+  if (!window.native || !window.native.recoveryWrite) return;
+  for (const d of S.docs) {
+    if (!d.dirty || d.autosavedRev === d.histIdx + ':' + d.history.length) continue;
+    try {
+      const json = await serializeProject(d);
+      await window.native.recoveryWrite('doc-' + d.id + '.sakura', new TextEncoder().encode(JSON.stringify({ name: d.name, filePath: d.filePath, time: Date.now(), project: json })));
+      d.autosavedRev = d.histIdx + ':' + d.history.length;
+    } catch (e) { console.warn('Autosave fehlgeschlagen', e); }
+  }
+}
+export function clearRecovery(d) {
+  if (window.native && window.native.recoveryDelete) window.native.recoveryDelete('doc-' + d.id + '.sakura');
+}
+export async function restoreRecovery(items) {
+  for (const it of items) {
+    try {
+      const j = JSON.parse(new TextDecoder().decode(new Uint8Array(it.data)));
+      const d = await loadProject(j.project, j.name);
+      d.filePath = j.filePath || null; d.dirty = true; d.name = j.name;
+      addDoc(d);
+    } catch (e) { toast('Wiederherstellung fehlgeschlagen: ' + it.name); }
+  }
+  if (window.native) await window.native.recoveryClear();
+}
 export function saveSwatches() { LS.set('swatches', S.swatches); LS.set('gradients', S.gradients); emit(); }
 
 export function maskColorIsReveal() { return luminance(S.fg) >= 0.5; }

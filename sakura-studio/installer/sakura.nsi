@@ -4,7 +4,7 @@ SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 
 !define APP "Sakura Studio"
-!define VER "1.0.0"
+!define VER "1.1.0"
 !define EXE "Sakura Studio.exe"
 !define UNKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SakuraStudio"
 
@@ -15,7 +15,7 @@ InstallDirRegKey HKCU "Software\SakuraStudio" "InstallDir"
 RequestExecutionLevel user
 BrandingText "${APP} ${VER}"
 
-VIProductVersion "1.0.0.0"
+VIProductVersion "1.1.0.0"
 VIAddVersionKey /LANG=1031 "ProductName" "${APP}"
 VIAddVersionKey /LANG=1031 "FileDescription" "${APP} Setup"
 VIAddVersionKey /LANG=1031 "FileVersion" "${VER}"

@@ -1,13 +1,18 @@
 // Hilfsfunktionen für Canvas & Farben
 
 export function makeCanvas(w, h) {
+  if (typeof document === 'undefined') return new OffscreenCanvas(Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(w));
   c.height = Math.max(1, Math.round(h));
   return c;
 }
 
+// GPU-beschleunigte Canvas für Ebenen; Pixel-lastige Hilfscanvas über ctxRead()
 export function ctx2d(c) {
+  return c.getContext('2d');
+}
+export function ctxRead(c) {
   return c.getContext('2d', { willReadFrequently: true });
 }
 

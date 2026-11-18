@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { S, emit, useStore, doc, view, commit, setFg, setBg, L, SELECT, openDialog, saveSwatches, setLayerProp, commitLater, PATTERNS, patternCanvas, toast, IMAGE, EDIT } from '../state.js';
+import { S, emit, useStore, useCursor, doc, view, commit, setFg, setBg, L, SELECT, openDialog, saveSwatches, setLayerProp, commitLater, PATTERNS, patternCanvas, toast, IMAGE, EDIT } from '../state.js';
+import { fmtUnit } from './CanvasView.jsx';
 import { BLEND_MODES } from '../engine/doc.js';
 import { makeCanvas, ctx2d, hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '../engine/util.js';
 import { histogram } from '../engine/filters.js';
@@ -164,11 +165,12 @@ function PropertiesPanel() {
       <div className="prop-sub"><Icon name="chevron" size={12} /> Leinwand</div>
       <div className="row canvas-size">
         <div className="col">
-          <label className="field"><span>B</span><input value={d.w + ' Px'} readOnly onClick={() => openDialog('canvasSize')} /></label>
-          <label className="field"><span>H</span><input value={d.h + ' Px'} readOnly onClick={() => openDialog('canvasSize')} /></label>
+          <Num label="B" value={d.w} min={1} max={30000} scrub={false} width={96} unit=" Px" onChange={(v) => { v = Math.round(v); if (v === d.w) return; IMAGE.canvasSize(v, lockRatio ? Math.max(1, Math.round(d.h * v / d.w)) : d.h); }} />
+          <Num label="H" value={d.h} min={1} max={30000} scrub={false} width={96} unit=" Px" onChange={(v) => { v = Math.round(v); if (v === d.h) return; IMAGE.canvasSize(lockRatio ? Math.max(1, Math.round(d.w * v / d.h)) : d.w, v); }} />
         </div>
-        <button className={'link-btn' + (lockRatio ? ' on' : '')} onClick={() => setLock(!lockRatio)} title="Seitenverhältnis"><Icon name="link" size={16} /></button>
+        <button className={'link-btn' + (lockRatio ? ' on' : '')} onClick={() => setLock(!lockRatio)} title={lockRatio ? 'Seitenverhältnis beibehalten (an)' : 'Seitenverhältnis beibehalten (aus)'}><Icon name="link" size={16} /></button>
       </div>
+      <div className="hint">Ändert die Arbeitsfläche (zentriert). Für Skalieren: Bildgröße.</div>
       <div className="row wrap">
         <button className="btn small" onClick={() => openDialog('imageSize')}>Bildgröße…</button>
         <button className="btn small" onClick={IMAGE.trim}>Zuschneiden</button>
@@ -231,9 +233,9 @@ function Thumb({ canvas, rev, w = 52, h = 32, mask }) {
   const ref = useRef(null);
   useEffect(() => {
     const c = ref.current; if (!c || !canvas) return;
-    const prev = thumbCache.get(canvas);
-    if (prev === rev && c.dataset.drawn === '1') return;
-    thumbCache.set(canvas, rev);
+    const key = rev + ':' + w + 'x' + h;
+    if (c.dataset.key === key) return;
+    c.dataset.key = key;
     const x = c.getContext('2d');
     const k = Math.min(w / canvas.width, h / canvas.height);
     const tw = canvas.width * k, th = canvas.height * k;
@@ -243,7 +245,6 @@ function Thumb({ canvas, rev, w = 52, h = 32, mask }) {
       for (let yy = 0; yy < th; yy += 4) for (let xx = 0; xx < tw; xx += 4) { x.fillStyle = ((xx + yy) / 4) % 2 ? '#ddd' : '#fff'; x.fillRect((w - tw) / 2 + xx, (h - th) / 2 + yy, 4, 4); }
       x.drawImage(canvas, (w - tw) / 2, (h - th) / 2, tw, th);
     }
-    c.dataset.drawn = '1';
   });
   return <canvas ref={ref} width={w} height={h} className="thumb" />;
 }
@@ -252,24 +253,26 @@ function LayersPanel() {
   useStore();
   const d = doc();
   const [filter, setFilter] = useState('');
+  const [kind, setKind] = useState('all');
   const [renaming, setRenaming] = useState(null);
   const [dragFrom, setDragFrom] = useState(null);
   const [fxMenu, setFxMenu] = useState(false);
   const [adjMenu, setAdjMenu] = useState(false);
   if (!d) return <div className="empty-panel"><Blossom size={36} /><br />Öffne oder erstelle ein Bild</div>;
   const l = d.layer;
-  const list = d.layers.map((x, i) => ({ x, i })).reverse().filter(({ x }) => !filter || x.name.toLowerCase().includes(filter.toLowerCase()));
+  const kindOk = (x) => kind === 'all' || (kind === 'text' && x.type === 'text') || (kind === 'pixel' && x.type !== 'text') || (kind === 'mask' && !!x.mask) || (kind === 'fx' && Object.values(x.fx || {}).some((f) => f && f.enabled));
+  const list = d.layers.map((x, i) => ({ x, i })).reverse().filter(({ x }) => kindOk(x) && (!filter || x.name.toLowerCase().includes(filter.toLowerCase())));
+  const tsz = { small: [36, 24], medium: [52, 32], large: [72, 46] }[S.prefs.thumbSize] || [52, 32];
   const lockBtn = (k, ic, title) => (
     <button className={'icon-btn small' + (l[k] ? ' on' : '')} title={title} onClick={() => setLayerProp(l, k, !l[k], 'Fixierung')}><Icon name={ic} size={14} /></button>
   );
   return (
     <div className="layers">
       <div className="layers-top">
-        <div className="search"><Icon name="zoom" size={13} /><input placeholder="Art" value={filter} onChange={(e) => setFilter(e.target.value)} /></div>
-        <button className="icon-btn small" title="Pixelebenen" onClick={() => setFilter('')}><Icon name="image" size={14} /></button>
-        <button className="icon-btn small" title="Korrekturen" onClick={() => runAdjustment('levels')}><Icon name="adjust" size={14} /></button>
-        <button className="icon-btn small" title="Textebenen" onClick={() => setFilter('text')}><Icon name="type" size={14} /></button>
-        <button className="icon-btn small" title="Formebenen" onClick={() => setFilter('form')}><Icon name="rect" size={14} /></button>
+        <div className="search"><Icon name="zoom" size={13} /><input placeholder="Ebenen suchen" value={filter} onChange={(e) => setFilter(e.target.value)} /></div>
+        {[['pixel', 'image', 'Nur Pixelebenen'], ['text', 'type', 'Nur Textebenen'], ['mask', 'mask', 'Nur Ebenen mit Maske'], ['fx', 'fx', 'Nur Ebenen mit Stil']].map(([k, ic, t]) => (
+          <button key={k} className={'icon-btn small' + (kind === k ? ' on' : '')} title={t} onClick={() => setKind(kind === k ? 'all' : k)}>{k === 'fx' ? <span className="fx-txt">fx</span> : <Icon name={ic} size={14} />}</button>
+        ))}
       </div>
       <div className="layers-row">
         <Sel value={l.blend} onChange={(v) => setLayerProp(l, 'blend', v, 'Füllmethode')} options={BLEND_MODES} width={150} />
@@ -284,6 +287,7 @@ function LayersPanel() {
         <Num label="Fläche:" value={Math.round(l.fill * 100)} onChange={(v) => { l.fill = v / 100; view.request(); emit(); commitLater('Fläche'); }} unit="%" width={50} />
       </div>
       <div className="layer-list">
+        {!list.length && <div className="hint pad">Keine passenden Ebenen</div>}
         {list.map(({ x, i }) => (
           <div key={x.id} className={'layer-item' + (i === d.active ? ' active' : '') + (dragFrom === i ? ' dragging' : '')}
             draggable={renaming !== x.id}
@@ -299,10 +303,10 @@ function LayersPanel() {
             }}><Icon name="eye" size={15} /></button>
             {x.clip && <span className="clip-arrow">↳</span>}
             <span className={'tw' + (!x.editMask ? ' sel' : '')} onMouseDown={() => { x.editMask = false; emit(); }}>
-              {x.type === 'text' ? <span className="text-thumb">T</span> : <Thumb canvas={x.canvas} rev={x.rev} />}
+              {x.type === 'text' ? <span className="text-thumb" style={{ width: tsz[0], height: tsz[1] }}>T</span> : <Thumb canvas={x.canvas} rev={x.rev} w={tsz[0]} h={tsz[1]} />}
             </span>
             {x.mask && <span className={'tw mask' + (x.editMask ? ' sel' : '')} onMouseDown={(e) => { e.stopPropagation(); d.active = i; x.editMask = true; emit(); }} onClick={(e) => { if (e.shiftKey) { setLayerProp(x, 'maskEnabled', !x.maskEnabled, 'Maske'); } }}>
-              <Thumb canvas={x.mask} rev={x.rev} mask w={32} h={32} />{!x.maskEnabled && <span className="mask-off">✕</span>}
+              <Thumb canvas={x.mask} rev={x.rev} mask w={tsz[1]} h={tsz[1]} />{!x.maskEnabled && <span className="mask-off">✕</span>}
             </span>}
             {renaming === x.id
               ? <input className="rename" autoFocus defaultValue={x.name} onBlur={(e) => { x.name = e.target.value || x.name; setRenaming(null); commit('Ebene umbenennen'); }} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenaming(null); }} />
@@ -331,7 +335,7 @@ function LayersPanel() {
             {['brightness', 'levels', 'curves', 'hueSat', 'colorBalance', 'blackWhite', 'gradientMap', 'invert'].map((id) => <div key={id} className="menu-item" onClick={() => { setAdjMenu(false); runAdjustment(id); }}>{id === 'invert' ? 'Umkehren' : ({ brightness: 'Helligkeit/Kontrast…', levels: 'Tonwertkorrektur…', curves: 'Gradationskurven…', hueSat: 'Farbton/Sättigung…', colorBalance: 'Farbbalance…', blackWhite: 'Schwarzweiß…', gradientMap: 'Verlaufsumsetzung…' })[id]}</div>)}
           </div>}
         </div>
-        <button className="icon-btn" title="Ebene duplizieren" onClick={L.duplicate}><Icon name="folder" size={16} /></button>
+        <button className="icon-btn" title="Ebene duplizieren" onClick={L.duplicate}><Icon name="layers" size={16} /></button>
         <button className="icon-btn" title="Neue Ebene (Umschalt+Strg+N)" onClick={L.add}><Icon name="newLayer" size={16} /></button>
         <button className="icon-btn" title="Ebene löschen" onClick={L.remove}><Icon name="trash" size={16} /></button>
       </div>
@@ -454,40 +458,61 @@ function NavigatorPanel() {
   const d = doc();
   const ref = useRef(null);
   useEffect(() => {
-    if (!d || !ref.current) return;
-    const c = ref.current; const x = c.getContext('2d');
-    const k = Math.min(c.width / d.w, c.height / d.h);
-    x.clearRect(0, 0, c.width, c.height);
-    const tmp = makeCanvas(d.w, d.h); import('../engine/doc.js').then((m) => { m.composite(d, tmp); x.drawImage(tmp, (c.width - d.w * k) / 2, (c.height - d.h * k) / 2, d.w * k, d.h * k); });
-  });
+    let raf, last = -1, lastT = 0;
+    const tick = (t) => {
+      raf = requestAnimationFrame(tick);
+      const c = ref.current, dd = doc();
+      if (!c || !dd || !view.comp) return;
+      if (view.compRev === last || t - lastT < 200) return;
+      last = view.compRev; lastT = t;
+      const x = c.getContext('2d');
+      const k = Math.min(c.width / dd.w, c.height / dd.h);
+      x.clearRect(0, 0, c.width, c.height);
+      x.imageSmoothingQuality = 'high';
+      x.drawImage(view.comp, (c.width - dd.w * k) / 2, (c.height - dd.h * k) / 2, dd.w * k, dd.h * k);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
   if (!d) return <div className="empty-panel">Kein Dokument</div>;
   return (
     <div className="nav">
       <canvas ref={ref} width={240} height={150} />
-      <Num label="Zoom" value={Math.round(d.zoom * 100)} min={2} max={6400} onChange={(v) => { d.zoom = v / 100; view.request(); emit(); }} unit="%" width={56} />
+      <div className="row">
+        <button className="icon-btn" title="Auszoomen" onClick={() => import('../state.js').then((m) => m.VIEW.zoomBy(0.8))}><Icon name="min" size={14} /></button>
+        <input type="range" min={-4.6} max={4.15} step={0.01} value={Math.log(d.zoom)} onChange={(e) => import('../state.js').then((m) => { const z = Math.exp(Number(e.target.value)); m.VIEW.zoomTo(z, d.panX * z / d.zoom, d.panY * z / d.zoom, 0); })} style={{ flex: 1 }} />
+        <button className="icon-btn" title="Einzoomen" onClick={() => import('../state.js').then((m) => m.VIEW.zoomBy(1.25))}><Icon name="plus" size={14} /></button>
+        <span className="lbl">{Math.round(d.zoom * 100)} %</span>
+      </div>
     </div>
   );
 }
 
+const histoCache = { key: null, h: null };
 function InfoPanel() {
   useStore();
+  const c = useCursor();
   const d = doc();
   if (!d) return <div className="empty-panel">Kein Dokument</div>;
-  const c = S.cursor;
-  let rgb = '—';
+  let rgb = '—', hex = null;
   if (c.inside && c.x >= 0 && c.y >= 0 && c.x < d.w && c.y < d.h) {
-    const p = ctx2d(d.layer.canvas).getImageData(Math.floor(c.x), Math.floor(c.y), 1, 1).data;
+    const src = view.comp && view.comp.width === d.w ? view.comp : d.layer.canvas;
+    const p = src.getContext('2d').getImageData(Math.floor(c.x), Math.floor(c.y), 1, 1).data;
     rgb = `R ${p[0]}  G ${p[1]}  B ${p[2]}  A ${p[3]}`;
+    hex = '#' + [p[0], p[1], p[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
   }
-  const h = histogram(d.layer.canvas);
+  const key = d.id + ':' + d.layer.id + ':' + d.layer.rev;
+  if (histoCache.key !== key) { histoCache.key = key; histoCache.h = histogram(d.layer.canvas); }
+  const h = histoCache.h;
   const max = Math.max(...h.l, 1);
   return (
     <div className="info">
-      <div className="info-row"><b>RGB</b> {rgb}</div>
-      <div className="info-row"><b>X/Y</b> {c.inside ? `${Math.floor(c.x)}, ${Math.floor(c.y)} Px` : '—'}</div>
+      <div className="info-row"><b>RGB</b> {rgb} {hex && <span className="swatch-inline" style={{ background: hex, verticalAlign: 'middle' }} />}</div>
+      <div className="info-row"><b>X/Y</b> {c.inside ? `${fmtUnit(c.x, d)}, ${fmtUnit(c.y, d)}` : '—'}</div>
       <div className="info-row"><b>Dok</b> {d.w} × {d.h} Px · {d.layers.length} Ebenen · {d.history.length} Schritte</div>
+      <div className="hint">Histogramm der aktiven Ebene</div>
       <svg className="histo" viewBox="0 0 256 80" preserveAspectRatio="none">
-        <path d={'M0 80 ' + Array.from(h.l).map((v, i) => `L${i} ${80 - (v / max) * 78}`).join(' ') + ' L255 80Z'} fill="rgba(255,154,213,0.65)" />
+        <path d={'M0 80 ' + Array.from(h.l).map((v, i) => `L${i} ${80 - (v / max) * 78}`).join(' ') + ' L255 80Z'} fill="var(--accent)" opacity="0.65" />
       </svg>
     </div>
   );

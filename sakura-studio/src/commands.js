@@ -13,19 +13,18 @@ const hasSel = () => !!(doc() && doc().selection);
 export function runAdjustment(id) {
   const a = ADJUSTMENTS[id];
   if (!doc()) return;
-  if (!a.params.length && !a.custom) return applyDirect(a.apply, a.name.replace('…', ''));
+  if (!a.params.length && !a.custom) return applyFilterToLayer('adjust', id, { fg: S.fg, bg: S.bg }, a.name.replace('…', ''));
   openDialog('filter', { kind: 'adjust', id });
 }
 export function runFilter(id) {
   const f = FILTERS[id];
   if (!doc()) return;
   S.lastFilter = id;
-  if (!f.params.length) return applyDirect((c) => f.apply(c, { fg: S.fg, bg: S.bg }), f.name.replace('…', ''));
+  if (!f.params.length) return applyFilterToLayer('filter', id, { fg: S.fg, bg: S.bg }, f.name.replace('…', ''));
   openDialog('filter', { kind: 'filter', id });
 }
 
 import { applyFilterToLayer } from './ui/dialogs/applyFilter.js';
-function applyDirect(fn, name) { applyFilterToLayer(fn, name); }
 
 const filterGroups = {};
 Object.entries(FILTERS).forEach(([id, f]) => { (filterGroups[f.group] = filterGroups[f.group] || []).push({ label: f.name, run: () => runFilter(id), enabled: hasDoc }); });
@@ -45,7 +44,7 @@ export const MENUS = [
       { label: 'Als Photoshop-Datei (PSD) speichern…', run: () => exportPsd(), enabled: hasDoc },
       '-',
       { label: 'Exportieren', sub: [
-        { label: 'Schnell-Export als PNG', key: 'Umschalt+Strg+Alt+W', run: () => exportImage('png'), enabled: hasDoc },
+        { label: () => `Schnell-Export als ${({ png: 'PNG', jpeg: 'JPG', webp: 'WebP' })[S.prefs.exportFormat] || 'PNG'}`, key: 'Umschalt+Strg+Alt+W', run: () => exportImage(S.prefs.exportFormat || 'png', (S.prefs.jpgQuality || 90) / 100), enabled: hasDoc },
         { label: 'Exportieren als…', key: 'Alt+Strg+Umschalt+E', run: () => openDialog('export'), enabled: hasDoc },
         { label: 'Ebenen in Dateien exportieren…', run: exportLayers, enabled: hasDoc },
       ] },
@@ -210,6 +209,7 @@ export const MENUS = [
       { label: 'Farbbereich…', run: () => openDialog('colorRange'), enabled: hasDoc },
       { label: 'Motiv', run: SELECT.subject, enabled: hasDoc },
       '-',
+      { label: 'Auswählen und maskieren…', key: 'Alt+Strg+R', run: () => openDialog('selectMask'), enabled: hasSel },
       { label: 'Auswahl verändern', sub: [
         { label: 'Umrandung…', run: () => openDialog('modifySel', { kind: 'border' }), enabled: hasSel },
         { label: 'Abrunden…', run: () => openDialog('modifySel', { kind: 'smooth' }), enabled: hasSel },
@@ -240,7 +240,13 @@ export const MENUS = [
       { label: 'Ganzes Bild', key: 'Strg+0', run: VIEW.fit, enabled: hasDoc },
       { label: '100 %', key: 'Strg+1', run: VIEW.actual, enabled: hasDoc },
       '-',
-      { label: 'Bildschirmmodus wechseln', key: 'F', run: () => { S.ui.screenMode = (S.ui.screenMode + 1) % 3; if (S.ui.screenMode === 2 && window.native) window.native.win('fullscreen'); if (S.ui.screenMode === 0 && window.native) window.native.win('fullscreen'); emit(); } },
+      { label: 'Bildschirmmodus wechseln', key: 'F', run: cycleScreenMode },
+      { label: 'Kanäle', sub: [
+        { label: 'RGB', key: 'Strg+2', run: () => setChannels({ r: true, g: true, b: true }), enabled: hasDoc },
+        { label: 'Rot', key: 'Strg+3', run: () => setChannels({ r: true, g: false, b: false }), enabled: hasDoc },
+        { label: 'Grün', key: 'Strg+4', run: () => setChannels({ r: false, g: true, b: false }), enabled: hasDoc },
+        { label: 'Blau', key: 'Strg+5', run: () => setChannels({ r: false, g: false, b: true }), enabled: hasDoc },
+      ] },
       '-',
       { label: () => (S.ui.showRulers ? '✓ ' : '') + 'Lineale', key: 'Strg+R', run: () => VIEW.toggle('showRulers') },
       { label: () => (S.ui.showGrid ? '✓ ' : '') + 'Raster', key: "Strg+'", run: () => VIEW.toggle('showGrid') },
@@ -274,6 +280,15 @@ export const MENUS = [
     ],
   },
 ];
+
+function setChannels(o) { const d = doc(); if (!d) return; d.channelView = o; view.request(); emit(); }
+function cycleScreenMode() {
+  const prev = S.ui.screenMode;
+  S.ui.screenMode = (S.ui.screenMode + 1) % 3;
+  if (window.native && (S.ui.screenMode === 2 || prev === 2)) window.native.win('fullscreen');
+  toast(['Standardmodus', 'Ohne Bedienfelder', 'Vollbildmodus (F zum Verlassen)'][S.ui.screenMode]);
+  view.request(); emit();
+}
 
 function showPanel(group, tab) {
   S.ui.panelTabs[group] = tab;
@@ -324,7 +339,7 @@ export function onKeyDown(e) {
     return;
   }
   if (S.ui.tutorial) return;
-  if (S.ui.dialog) { if (e.key === 'Escape') { S.ui.dialog = null; emit(); } return; }
+  if (S.ui.dialog) return; // Dialoge behandeln ihre Tasten selbst
   const d = doc();
 
   if (e.key === ' ' && !e.repeat) { import('./tools.js').then((m) => { m.SPACE.held = true; }); e.preventDefault(); return; }
@@ -353,24 +368,25 @@ export function onKeyDown(e) {
   }
   // Pfeiltasten
   if (d && S.tool === 'move' && e.key.startsWith('Arrow')) {
-    const s = e.shiftKey ? 10 : 1;
+    const s = e.shiftKey ? (S.prefs.nudgeStep || 10) : 1;
     const dx = e.key === 'ArrowLeft' ? -s : e.key === 'ArrowRight' ? s : 0, dy = e.key === 'ArrowUp' ? -s : e.key === 'ArrowDown' ? s : 0;
     e.preventDefault(); nudge(dx, dy); return;
   }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && d) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && d && !e.ctrlKey && !e.altKey && !e.metaKey) {
     if (e.shiftKey) { openDialog('fill'); return; }
     e.preventDefault(); EDIT.clear(); return;
   }
   if (e.ctrlKey || e.metaKey || e.altKey) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Backspace') { EDIT.fill('bg'); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Backspace' && d) { e.preventDefault(); EDIT.fill('bg'); return; }
+    if (e.altKey && e.key === 'Backspace' && d) { e.preventDefault(); EDIT.fill('fg'); return; }
     return;
   }
   const k = e.key.toLowerCase();
   if (k === 'x') { const t = S.fg; S.fg = S.bg; S.bg = t; emit(); return; }
   if (k === 'd') { S.fg = '#000000'; S.bg = '#ffffff'; emit(); return; }
   if (k === 'q' && d) { SELECT.toggleQuickMask(); return; }
-  if (k === 'f') { MENUS.find((m) => m.id === 'view').items.find((i) => i.key === 'F').run(); return; }
-  if (k === 'tab') { e.preventDefault(); S.ui.hidePanels = !S.ui.hidePanels; emit(); return; }
+  if (k === 'f') { cycleScreenMode(); return; }
+  if (k === 'tab') { e.preventDefault(); S.ui.hidePanels = !S.ui.hidePanels; view.request(); emit(); return; }
   if (k === '[' || k === ']') {
     const f = k === ']' ? 1.15 : 1 / 1.15;
     if (S.tool === 'eraser') S.eraser.size = Math.max(1, Math.round(S.eraser.size * f));

@@ -1,7 +1,7 @@
 {
   "name": "sakura-studio",
   "productName": "Sakura Studio",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Sakura Studio – Bildbearbeitung",
   "author": "Sakura Studio",
   "main": "electron/main.cjs",

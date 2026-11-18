@@ -48,6 +48,7 @@ export class Layer {
 }
 
 export class Doc {
+  static maxHistory = 60;
   constructor(w, h, name = 'Unbenannt-1') {
     this.id = nextId();
     this.name = name;
@@ -134,7 +135,7 @@ export class Doc {
   commit(name) {
     this.history = this.history.slice(0, this.histIdx + 1);
     this.history.push({ name, state: this.snapshot(), time: Date.now() });
-    if (this.history.length > 60) this.history.shift();
+    if (this.history.length > Doc.maxHistory) this.history.shift();
     this.histIdx = this.history.length - 1;
     if (this.history.length > 1) this.dirty = true;
   }
@@ -370,17 +371,17 @@ function renderLayerFx(layer, w, h, key) {
   return out;
 }
 
-// Gesamtes Dokument in ctx rendern
-export function composite(doc, target, opts = {}) {
-  const { w, h } = doc;
-  const x = target.getContext('2d');
-  x.save();
-  x.setTransform(1, 0, 0, 1, 0, 0);
-  x.clearRect(0, 0, target.width, target.height);
+// Signatur einer Ebenenliste (Inhalt + Eigenschaften) für Caches
+export function layerSig(layers) {
+  let out = '';
+  for (const l of layers) out += l.id + ':' + l.rev + ':' + (l.visible ? 1 : 0) + ':' + l.opacity + ':' + l.blend + ':' + l.fill + ':' + (l.clip ? 1 : 0) + ':' + (l.maskEnabled ? 1 : 0) + ':' + (l.mask ? 1 : 0) + ':' + JSON.stringify(l.fx || {}) + '|';
+  return out;
+}
+
+function drawLayers(layers, x, w, h, opts = {}) {
   let base = null; // Basis für Schnittmasken
-  doc.layers.forEach((layer, i) => {
+  layers.forEach((layer, i) => {
     if (!layer.visible && !opts.forceAll) { if (!layer.clip) base = null; return; }
-    if (opts.only && opts.only !== layer) return;
     let src = renderLayerFx(layer, w, h, 'L' + (i % 2));
     if (layer.clip && base) {
       const c = tmp('clip', w, h);
@@ -396,6 +397,91 @@ export function composite(doc, target, opts = {}) {
     x.globalCompositeOperation = gcoFor(layer.blend);
     x.drawImage(src, 0, 0);
   });
+  x.globalAlpha = 1;
+  x.globalCompositeOperation = 'source-over';
+}
+
+const compCache = new WeakMap();
+function cacheFor(doc) {
+  let c = compCache.get(doc);
+  if (!c) { c = { belowSig: null, below: null, aboveSig: null, above: null, mergedSig: null, merged: null }; compCache.set(doc, c); }
+  return c;
+}
+
+// Gesamtes Dokument rendern. Ebenen unter/über der aktiven Ebene werden zwischengespeichert,
+// sodass beim Malen nur die aktive Ebene neu zusammengesetzt werden muss.
+export function composite(doc, target, opts = {}) {
+  const { w, h } = doc;
+  const x = target.getContext('2d');
+  x.save();
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  const L = doc.layers;
+  const a = doc.active;
+  const canCache = opts.cached && !L.some((l) => l.clip) && a >= 0 && a < L.length;
+  // Nur Ausschnitt neu zusammensetzen, wenn sich ausschließlich die aktive Ebene geändert hat
+  if (canCache && opts.rect) {
+    const cache = cacheFor(doc);
+    const below = L.slice(0, a), above = L.slice(a + 1);
+    const okBelow = !below.length || (cache.below && cache.belowSig === w + 'x' + h + '#' + layerSig(below));
+    const simpleAbove = above.every((l) => !l.visible || l.blend === 'normal');
+    const okAbove = !above.length || !simpleAbove || (cache.above && cache.aboveSig === w + 'x' + h + '#' + layerSig(above));
+    const act = L[a];
+    const plainActive = !(act.mask && act.maskEnabled) && act.fill >= 1 && act.blend !== 'dissolve' && !Object.values(act.fx || {}).some((f) => f && f.enabled);
+    if (okBelow && okAbove && plainActive) {
+      const r = opts.rect;
+      const rx = Math.max(0, Math.floor(r.x)), ry = Math.max(0, Math.floor(r.y));
+      const rw = Math.min(w, Math.ceil(r.x + r.w)) - rx, rh = Math.min(h, Math.ceil(r.y + r.h)) - ry;
+      if (rw > 0 && rh > 0) {
+        x.beginPath(); x.rect(rx, ry, rw, rh); x.clip();
+        x.clearRect(rx, ry, rw, rh);
+        if (below.length) x.drawImage(cache.below, rx, ry, rw, rh, rx, ry, rw, rh);
+        if (act.visible) {
+          x.globalAlpha = act.opacity; x.globalCompositeOperation = gcoFor(act.blend);
+          x.drawImage(act.canvas, rx, ry, rw, rh, rx, ry, rw, rh);
+          x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
+        }
+        if (above.length) {
+          if (simpleAbove) x.drawImage(cache.above, rx, ry, rw, rh, rx, ry, rw, rh);
+          else drawLayers(above, x, w, h);
+        }
+      }
+      x.restore();
+      return;
+    }
+  }
+  x.clearRect(0, 0, target.width, target.height);
+  if (!canCache || L.length < 3) {
+    drawLayers(L, x, w, h, opts);
+  } else {
+    const cache = cacheFor(doc);
+    const below = L.slice(0, a), above = L.slice(a + 1);
+    if (below.length) {
+      const sig = w + 'x' + h + '#' + layerSig(below);
+      if (sig !== cache.belowSig || !cache.below) {
+        if (!cache.below) cache.below = makeCanvas(w, h);
+        if (cache.below.width !== w || cache.below.height !== h) { cache.below.width = w; cache.below.height = h; }
+        const bx = ctx2d(cache.below); bx.clearRect(0, 0, w, h);
+        drawLayers(below, bx, w, h);
+        cache.belowSig = sig;
+      }
+      x.drawImage(cache.below, 0, 0);
+    }
+    drawLayers([L[a]], x, w, h);
+    if (above.length) {
+      const simple = above.every((l) => !l.visible || l.blend === 'normal');
+      if (simple) {
+        const sig = w + 'x' + h + '#' + layerSig(above);
+        if (sig !== cache.aboveSig || !cache.above) {
+          if (!cache.above) cache.above = makeCanvas(w, h);
+          if (cache.above.width !== w || cache.above.height !== h) { cache.above.width = w; cache.above.height = h; }
+          const ax = ctx2d(cache.above); ax.clearRect(0, 0, w, h);
+          drawLayers(above, ax, w, h);
+          cache.aboveSig = sig;
+        }
+        x.drawImage(cache.above, 0, 0);
+      } else drawLayers(above, x, w, h);
+    }
+  }
   x.restore();
 
   // Kanalansicht
@@ -414,6 +500,19 @@ export function composite(doc, target, opts = {}) {
     }
     x.putImageData(id, 0, 0);
   }
+}
+
+// Zusammengesetztes Bild (zwischengespeichert, solange sich nichts ändert)
+export function getMerged(doc) {
+  const cache = cacheFor(doc);
+  const sig = doc.w + 'x' + doc.h + '#' + layerSig(doc.layers);
+  if (sig !== cache.mergedSig || !cache.merged) {
+    if (!cache.merged) cache.merged = makeCanvas(doc.w, doc.h);
+    if (cache.merged.width !== doc.w || cache.merged.height !== doc.h) { cache.merged.width = doc.w; cache.merged.height = doc.h; }
+    composite({ w: doc.w, h: doc.h, layers: doc.layers, active: doc.active, channelView: null }, cache.merged, { noChannels: true });
+    cache.mergedSig = sig;
+  }
+  return cache.merged;
 }
 
 export function flattenToCanvas(doc, bg) {

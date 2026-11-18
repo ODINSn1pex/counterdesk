@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { S, emit, useStore, setTool, doc, closeDoc, view, EDIT, L, SELECT, openDialog, startTransform } from '../state.js';
+import { S, emit, useStore, useCursor, setTool, doc, closeDoc, view, EDIT, L, SELECT, openDialog, startTransform, isAnime, initCrop } from '../state.js';
+import { fmtUnit } from './CanvasView.jsx';
 import { MENUS } from '../commands.js';
 import { Icon, Blossom, Logo } from './icons.jsx';
 
@@ -26,12 +27,12 @@ export function TitleBar() {
         </nav>
       </div>
       <div className="tb-drag" />
-      <div className="tb-art" aria-hidden="true">
+      {isAnime() && <div className="tb-art" aria-hidden="true">
         <img src="./header-art.jpg" alt="" />
         <Blossom size={26} className="tb-b1" />
         <Blossom size={18} className="tb-b2" color="#ffc4e2" />
         <Blossom size={22} className="tb-b3" />
-      </div>
+      </div>}
       <div className="win-ctl">
         <button title="Minimieren" onClick={() => window.native && window.native.win('min')}><Icon name="min" size={16} /></button>
         <button title={max ? 'Wiederherstellen' : 'Maximieren'} onClick={() => window.native && window.native.win('max')}><Icon name={max ? 'restore' : 'max'} size={14} /></button>
@@ -155,7 +156,7 @@ export function Toolbar() {
         </button>
       </div>
       <button className={'tool' + (S.ui.quickMask ? ' active' : '')} title="Im Maskierungsmodus bearbeiten (Q)" onClick={() => SELECT.toggleQuickMask()}><Icon name="quickmask" size={20} /></button>
-      <div className="tb-blossom"><Blossom size={30} /></div>
+      {isAnime() && <div className="tb-blossom"><Blossom size={30} /></div>}
     </div>
   );
 }
@@ -167,7 +168,7 @@ export function DocTabs() {
   return (
     <div className="doc-tabs">
       {S.docs.map((d) => (
-        <div key={d.id} className={'doc-tab' + (d.id === S.activeId ? ' active' : '')} onMouseDown={() => { S.activeId = d.id; view.request(); emit(); }}>
+        <div key={d.id} title={d.filePath || d.name} className={'doc-tab' + (d.id === S.activeId ? ' active' : '')} onMouseDown={(e) => { if (e.button === 1) { closeDoc(d.id); return; } S.activeId = d.id; if (S.tool === 'crop') initCrop(); view.request(); emit(); }}>
           <span>{d.name}{d.dirty ? ' *' : ''} bei {Math.round(d.zoom * 1000) / 10}% (RGB/8)</span>
           <button className="x" onMouseDown={(e) => { e.stopPropagation(); closeDoc(d.id); }}><Icon name="close" size={12} /></button>
         </div>
@@ -177,20 +178,39 @@ export function DocTabs() {
 }
 
 // ---------------- Statusleiste ----------------
+function CursorPos() {
+  const c = useCursor();
+  const d = doc();
+  return <span className="sb-pos">{c.inside && d ? `X: ${fmtUnit(c.x, d)}   Y: ${fmtUnit(c.y, d)}` : ''}</span>;
+}
+
+function ZoomInput({ d }) {
+  const [txt, setTxt] = useState(null);
+  const val = Math.round(d.zoom * 1000) / 10 + ' %';
+  return (
+    <input className="zoom-in" value={txt ?? val} title="Zoomstufe – Wert eingeben und Enter drücken"
+      onFocus={(e) => { setTxt(String(Math.round(d.zoom * 1000) / 10)); setTimeout(() => e.target.select(), 0); }}
+      onChange={(e) => setTxt(e.target.value)}
+      onBlur={() => setTxt(null)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { const v = parseFloat(String(e.target.value).replace(',', '.')); if (v > 0) import('../state.js').then((m) => m.VIEW.zoomTo(Math.min(64, Math.max(0.02, v / 100)), d.panX * (v / 100) / d.zoom, d.panY * (v / 100) / d.zoom)); e.target.blur(); }
+        if (e.key === 'Escape') e.target.blur();
+      }} />
+  );
+}
+
 export function StatusBar() {
   useStore();
   const d = doc();
-  if (!d) return <div className="statusbar" />;
-  const c = S.cursor;
+  if (!d) return <div className="statusbar"><span className="muted">Bereit</span></div>;
+  const mem = d.layers.length * d.w * d.h * 4 / 1048576;
   return (
     <div className="statusbar">
-      <input className="zoom-in" value={Math.round(d.zoom * 1000) / 10 + '%'} onChange={() => {}} onKeyDown={(e) => {
-        if (e.key === 'Enter') { const v = parseFloat(e.target.value); if (v > 0) { d.zoom = v / 100; view.request(); emit(); } }
-      }} title="Zoomstufe" />
-      <span className="sb-dim">{d.w} Px × {d.h} Px ({d.ppi} ppi)</span>
-      <span className="sb-pos">{c.inside ? `X: ${Math.floor(c.x)}  Y: ${Math.floor(c.y)}` : ''}</span>
+      <ZoomInput d={d} />
+      <span className="sb-dim">{fmtUnit(d.w, d)} × {fmtUnit(d.h, d)} ({d.ppi} ppi)</span>
+      <CursorPos />
       <span className="sb-hist">{d.history[d.histIdx] ? 'Letzter Schritt: ' + d.history[d.histIdx].name : ''}</span>
-      <div className="sb-scroll"><div className="sb-thumb" /></div>
+      <span className="sb-mem" title="Arbeitsspeicher der Ebenen">{d.layers.length} Ebene{d.layers.length === 1 ? '' : 'n'} · {mem < 1024 ? mem.toFixed(0) + ' MB' : (mem / 1024).toFixed(1) + ' GB'}</span>
     </div>
   );
 }

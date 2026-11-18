@@ -20,7 +20,7 @@ export default async function afterPack(context) {
   for (const v of vi) {
     const lang = { lang: 1033, codepage: 1200 };
     v.setStringValues(lang, { FileDescription: 'Sakura Studio', ProductName: 'Sakura Studio', CompanyName: 'Sakura Studio', LegalCopyright: '© 2026 Sakura Studio', OriginalFilename: 'Sakura Studio.exe', InternalName: 'Sakura Studio' });
-    v.setFileVersion(1, 0, 0, 0, 1033); v.setProductVersion(1, 0, 0, 0, 1033);
+    v.setFileVersion(1, 1, 0, 0, 1033); v.setProductVersion(1, 1, 0, 0, 1033);
     v.outputToResourceEntries(res.entries);
   }
   res.outputResource(pe);

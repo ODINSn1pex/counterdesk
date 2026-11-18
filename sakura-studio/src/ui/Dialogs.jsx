@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { S, emit, useStore, doc, view, commit, closeDialog, newDocument, IMAGE, EDIT, SELECT, VIEW, exportImage, closeDoc, savePrefs, saveSwatches, setFg, setBg, saveProject } from '../state.js';
+import { S, emit, useStore, doc, view, commit, closeDialog, newDocument, IMAGE, EDIT, SELECT, VIEW, exportImage, closeDoc, savePrefs, saveSwatches, setFg, setBg, saveProject, DEFAULT_PREFS, ACCENTS, resetToolOptions, restoreRecovery, L, toast } from '../state.js';
+import { feather as selFeather, expand as selExpand, contract as selContract, smooth as selSmooth } from '../engine/selection.js';
+import { cloneCanvas } from '../engine/util.js';
 import { ADJUSTMENTS, FILTERS, histogram, curveLut } from '../engine/filters.js';
 import { BLEND_MODES } from '../engine/doc.js';
-import { beginPreview, previewWith, endPreview } from './dialogs/applyFilter.js';
+import { beginPreview, previewFilter, showOriginal, finishFilter, cancelPreview } from './dialogs/applyFilter.js';
 import { Num, Sel, Check, gradientCss } from './OptionsBar.jsx';
 import { ColorField } from './Panels.jsx';
 import { allShortcuts } from '../commands.js';
@@ -10,9 +12,27 @@ import { Blossom, Icon, Logo } from './icons.jsx';
 import { hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '../engine/util.js';
 
 function Modal({ title, children, onOk, onCancel, okLabel = 'OK', width = 420, extra }) {
+  const ref = useRef(null);
+  const cb = useRef({});
+  cb.current = { onOk, onCancel };
+  useEffect(() => {
+    const k = (e) => {
+      const { onOk: ok, onCancel: cancel } = cb.current;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel && cancel(); }
+      else if (e.key === 'Enter' && ok && !(e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON'))) {
+        e.preventDefault(); e.stopPropagation();
+        if (e.target && e.target.blur) e.target.blur();
+        setTimeout(() => cb.current.onOk && cb.current.onOk(), 0);
+      }
+    };
+    window.addEventListener('keydown', k, true);
+    const first = ref.current && ref.current.querySelector('input:not([type=checkbox]):not([type=range]):not([type=color]):not([readonly])');
+    if (first) setTimeout(() => first.focus(), 30);
+    return () => window.removeEventListener('keydown', k, true);
+  }, []);
   return (
     <div className="modal-back" onMouseDown={(e) => e.stopPropagation()}>
-      <div className="modal" style={{ width }}>
+      <div className="modal" style={{ width }} ref={ref} role="dialog" aria-label={title}>
         <div className="modal-title"><Blossom size={16} /> {title}<div className="flex" /><button className="x" onClick={onCancel}><Icon name="close" size={14} /></button></div>
         <div className="modal-body">{children}</div>
         <div className="modal-foot">
@@ -34,7 +54,7 @@ export function Dialogs() {
     new: NewDocDialog, filter: FilterDialog, imageSize: ImageSizeDialog, canvasSize: CanvasSizeDialog, fill: FillDialog, stroke: StrokeDialog,
     export: ExportDialog, modifySel: ModifySelDialog, colorRange: ColorRangeDialog, layerStyle: LayerStyleDialog, colorPicker: ColorPickerDialog,
     shortcuts: ShortcutsDialog, prefs: PrefsDialog, about: AboutDialog, confirmClose: ConfirmCloseDialog, guide: GuideDialog, histogram: HistogramDialog,
-    gradientEditor: GradientEditorDialog, features: FeaturesDialog, appClose: AppCloseDialog,
+    gradientEditor: GradientEditorDialog, features: FeaturesDialog, appClose: AppCloseDialog, selectMask: SelectMaskDialog, recovery: RecoveryDialog,
   }[dg.type];
   return C ? <C dg={dg} key={dg.type + (dg.id || '') + (dg.tab || '')} /> : null;
 }
@@ -45,14 +65,14 @@ const PRESETS = [
   ['YouTube-Thumbnail 1280 × 720', 1280, 720], ['A4 (300 ppi) 2480 × 3508', 2480, 3508], ['Postkarte 1748 × 1240', 1748, 1240], ['Icon 512 × 512', 512, 512], ['Wallpaper 2560 × 1440', 2560, 1440],
 ];
 function NewDocDialog() {
-  const [w, setW] = useState(1920), [h, setH] = useState(1080), [name, setName] = useState(`Unbenannt-${S.docs.length + 1}`), [bg, setBg2] = useState('white'), [color, setColor] = useState('#ffd6ec');
-  const ok = () => { closeDialog(); newDocument({ w, h, name, background: bg, color }); };
+  const [w, setW] = useState(1920), [h, setH] = useState(1080), [name, setName] = useState(`Unbenannt-${S.docs.length + 1}`), [bg, setBg2] = useState('white'), [color, setColor] = useState('#ffd6ec'), [ppi, setPpi] = useState(S.prefs.defaultPpi || 72);
+  const ok = () => { closeDialog(); newDocument({ w, h, name, background: bg, color, ppi }); };
   return (
     <Modal title="Neues Dokument" onOk={ok} onCancel={closeDialog} okLabel="Erstellen" width={620}>
       <div className="nd">
         <div className="nd-presets">
           {PRESETS.map(([n, pw, ph]) => (
-            <button key={n} className={'preset' + (w === pw && h === ph ? ' on' : '')} onClick={() => { setW(pw); setH(ph); }}>
+            <button key={n} className={'preset' + (w === pw && h === ph ? ' on' : '')} onClick={() => { setW(pw); setH(ph); if (/300 ppi/.test(n)) setPpi(300); }}>
               <span className="pv" style={{ aspectRatio: `${pw}/${ph}` }} />{n}
             </button>
           ))}
@@ -61,6 +81,7 @@ function NewDocDialog() {
           <label className="field col"><span>Name</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
           <div className="row"><Num label="Breite" value={w} min={1} max={16000} onChange={setW} unit=" Px" width={70} /><Num label="Höhe" value={h} min={1} max={16000} onChange={setH} unit=" Px" width={70} /></div>
           <button className="btn small" onClick={() => { setW(h); setH(w); }}>⇄ Ausrichtung tauschen</button>
+          <Num label="Auflösung" value={ppi} min={1} max={2400} onChange={setPpi} unit=" ppi" width={70} />
           <label className="field col"><span>Hintergrundinhalt</span>
             <Sel value={bg} onChange={setBg2} options={[['white', 'Weiß'], ['black', 'Schwarz'], ['transparent', 'Transparent'], ['color', 'Eigene Farbe']]} width="100%" />
           </label>
@@ -75,44 +96,51 @@ function NewDocDialog() {
 // ---------------- Filter / Korrekturen mit Vorschau ----------------
 function FilterDialog({ dg }) {
   const def = dg.kind === 'adjust' ? ADJUSTMENTS[dg.id] : FILTERS[dg.id];
-  const [p, setP] = useState(() => Object.fromEntries(def.params.map((x) => [x.key, x.def])));
+  const defaults = () => Object.fromEntries(def.params.map((x) => [x.key, x.def]));
+  const [p, setP] = useState(() => ({ ...defaults(), ...((S.filterMemory || {})[dg.id] || {}) }));
   const [preview, setPreview] = useState(true);
   const [busy, setBusy] = useState(false);
   const pv = useRef(null);
   const timer = useRef(null);
-  useEffect(() => { pv.current = beginPreview(); return () => { if (pv.current) endPreview(pv.current, false); }; }, []);
+  const done = useRef(false);
+  useEffect(() => { pv.current = beginPreview(); return () => { if (pv.current && !done.current) cancelPreview(pv.current); }; }, []);
   const extra = { fg: S.fg, bg: S.bg };
   useEffect(() => {
     if (!pv.current) return;
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
+    timer.current = setTimeout(async () => {
+      if (!preview) { showOriginal(pv.current); return; }
       setBusy(true);
-      requestAnimationFrame(() => {
-        try {
-          if (preview) previewWith(pv.current, (c) => def.apply(c, { ...p, ...extra }));
-          else previewWith(pv.current, (c) => c);
-        } catch (e) { console.error(e); }
-        setBusy(false);
-      });
-    }, 120);
+      await previewFilter(pv.current, dg.kind, dg.id, { ...p, ...extra }, S.prefs.fastPreview !== false);
+      setBusy(false);
+    }, 90);
+    return () => clearTimeout(timer.current);
   }, [p, preview]);
-  const ok = () => {
+  const ok = async () => {
+    if (done.current) return;
+    done.current = true;
+    S.filterMemory = { ...(S.filterMemory || {}), [dg.id]: p };
+    clearTimeout(timer.current);
     const cur = pv.current; pv.current = null;
-    try { previewWith(cur, (c) => def.apply(c, { ...p, ...extra })); endPreview(cur, true, def.name.replace('…', '')); } catch (e) { endPreview(cur, false); }
     closeDialog();
+    if (!cur) return;
+    document.body.classList.add('busy'); S.ui.busy = def.name.replace('…', ''); emit();
+    await finishFilter(cur, dg.kind, dg.id, { ...p, ...extra }, def.name.replace('…', ''));
+    document.body.classList.remove('busy'); S.ui.busy = null; emit();
   };
-  const cancel = () => { if (pv.current) endPreview(pv.current, false); pv.current = null; closeDialog(); };
+  const cancel = () => { if (pv.current) cancelPreview(pv.current); pv.current = null; done.current = true; closeDialog(); };
   if (!doc()) return null;
   return (
-    <Modal title={def.name.replace('…', '')} onOk={ok} onCancel={cancel} width={def.custom === 'curves' ? 520 : 440}
-      extra={<><Check label="Vorschau" value={preview} onChange={setPreview} /><button className="btn small" onClick={() => setP(Object.fromEntries(def.params.map((x) => [x.key, x.def])))}>Zurücksetzen</button>{busy && <span className="spin" />}</>}>
+    <Modal title={def.name.replace('…', '')} onOk={ok} onCancel={cancel} width={def.custom === 'curves' ? 520 : 460}
+      extra={<><Check label="Vorschau" value={preview} onChange={setPreview} /><button className="btn small" onClick={() => setP(defaults())}>Zurücksetzen</button>{busy && <span className="spin" title="Berechne Vorschau…" />}</>}>
+      {!pv.current && <div className="hint warn">Diese Ebene kann nicht bearbeitet werden (fixiert oder ausgeblendet).</div>}
       {def.custom === 'levels' && <LevelsHisto p={p} />}
       {def.custom === 'curves' && <CurvesEditor p={p} setP={setP} />}
       <div className="params">
         {def.params.map((x) => (
-          <ParamRow key={x.key} x={x} value={p[x.key]} onChange={(v) => setP({ ...p, [x.key]: v })} />
+          <ParamRow key={x.key} x={x} value={p[x.key]} onChange={(v) => setP((old) => ({ ...old, [x.key]: v }))} />
         ))}
-        {!def.pa && def.usesColors && <div className="hint">Verwendet Vorder- und Hintergrundfarbe.</div>}
+        {def.usesColors && <div className="hint">Verwendet Vorder- und Hintergrundfarbe.</div>}
       </div>
     </Modal>
   );
@@ -415,29 +443,164 @@ function ShortcutsDialog() {
   );
 }
 
-function PrefsDialog() {
+function Row({ label, children, hint }) { return <div className="pref-row"><span className="pref-label">{label}</span><div className="pref-ctl">{children}{hint && <div className="hint">{hint}</div>}</div></div>; }
+
+const PREF_CATS = [['general', 'Allgemein'], ['ui', 'Benutzeroberfläche'], ['tools', 'Werkzeuge'], ['perf', 'Leistung'], ['grid', 'Transparenz & Raster'], ['units', 'Einheiten & Lineale'], ['files', 'Dateien'], ['reset', 'Zurücksetzen']];
+function PrefsDialog({ dg }) {
   useStore();
+  const [cat, setCat] = useState(dg.cat || 'general');
   const p = S.prefs;
-  const set = (k) => (v) => { p[k] = v; savePrefs(); document.documentElement.dataset.theme = p.theme || 'sakura'; };
+  const set = (k) => (v) => { p[k] = v; savePrefs(); };
+  const chooseDir = async () => { if (!window.native) { toast('Nur in der Desktop-App'); return; } const d = await window.native.chooseFolder({ title: 'Standard-Speicherordner wählen', defaultPath: p.saveDir || undefined }); if (d) set('saveDir')(d); };
   return (
-    <Modal title="Voreinstellungen" onCancel={closeDialog} onOk={closeDialog}>
-      <label className="prow"><span>Farbschema</span><Sel value={p.theme || 'sakura'} onChange={set('theme')} options={[['sakura', 'Sakura-Nacht (Standard)'], ['dawn', 'Morgenröte (hell)'], ['midnight', 'Mitternacht (dunkel)']]} width={220} /></label>
-      <Check label="Fallende Kirschblüten auf dem Startbildschirm" value={p.sakuraPetals} onChange={set('sakuraPetals')} />
-      <Num label="Protokollobjekte" value={p.historyStates} min={5} max={200} onChange={set('historyStates')} />
-      <button className="btn small" onClick={() => { localStorage.removeItem('sakura.tutorialDone'); S.ui.tutorial = true; closeDialog(); }}>Tutorial erneut anzeigen</button>
+    <Modal title="Voreinstellungen" onCancel={closeDialog} onOk={closeDialog} width={760}>
+      <div className="prefs">
+        <div className="prefs-nav">{PREF_CATS.map(([k, n]) => <button key={k} className={cat === k ? 'on' : ''} onClick={() => setCat(k)}>{n}</button>)}</div>
+        <div className="prefs-body">
+          {cat === 'general' && <>
+            <h4>Allgemein</h4>
+            <Row label="Startbildschirm"><Check label="Startbildschirm anzeigen, wenn kein Dokument offen ist" value={p.showWelcome} onChange={set('showWelcome')} /></Row>
+            <Row label="Automatisch sichern" hint="Ungespeicherte Dokumente werden für die Wiederherstellung nach einem Absturz gesichert."><Sel value={String(p.autoSaveMin)} onChange={(v) => set('autoSaveMin')(Number(v))} options={[['0', 'Aus'], ['1', 'Jede Minute'], ['3', 'Alle 3 Minuten'], ['5', 'Alle 5 Minuten'], ['10', 'Alle 10 Minuten']]} width={200} /></Row>
+            <Row label="Protokollobjekte" hint="Mehr Schritte benötigen mehr Arbeitsspeicher."><Num value={p.historyStates} min={5} max={300} onChange={set('historyStates')} width={60} /></Row>
+            <Row label="Zuletzt verwendet"><Num value={p.recentCount} min={0} max={30} onChange={set('recentCount')} unit=" Dateien" width={70} /></Row>
+            <Row label="Beim Beenden"><Check label="Bei ungespeicherten Änderungen nachfragen" value={p.confirmClose} onChange={set('confirmClose')} /></Row>
+            <Row label="Tutorial"><button className="btn small" onClick={() => { localStorage.removeItem('sakura.tutorialDone'); S.ui.tutorial = true; closeDialog(); }}>Tutorial jetzt erneut anzeigen</button></Row>
+          </>}
+          {cat === 'ui' && <>
+            <h4>Benutzeroberfläche</h4>
+            <Row label="Farbschema">
+              <div className="theme-grid">
+                {[['dark', 'Dunkel'], ['light', 'Hell'], ['system', 'Wie System'], ['anime', 'Anime · Sakura-Nacht'], ['anime-day', 'Anime · Sakura-Tag']].map(([k, n]) => (
+                  <button key={k} className={'theme-card t-' + k + (p.theme === k ? ' on' : '')} onClick={() => set('theme')(k)}><span className="tc-prev"><i /><i /><i /></span>{n}</button>
+                ))}
+              </div>
+            </Row>
+            <Row label="Akzentfarbe">
+              <div className="accents">
+                <button className={'acc auto' + (p.accent === 'auto' ? ' on' : '')} onClick={() => set('accent')('auto')} title="Automatisch (passend zum Farbschema)">A</button>
+                {Object.entries(ACCENTS).map(([k, c]) => <button key={k} className={'acc' + (p.accent === k ? ' on' : '')} style={{ background: c[0] }} title={k} onClick={() => set('accent')(k)} />)}
+              </div>
+            </Row>
+            <Row label="Skalierung der Oberfläche" hint={window.native ? '' : 'Nur in der Desktop-App wirksam.'}><Sel value={String(p.uiScale)} onChange={(v) => set('uiScale')(Number(v))} options={[['0.8', '80 %'], ['0.9', '90 %'], ['1', '100 %'], ['1.1', '110 %'], ['1.25', '125 %'], ['1.5', '150 %']]} width={120} /></Row>
+            <Row label="Ebenen-Miniaturen"><Sel value={p.thumbSize} onChange={set('thumbSize')} options={[['small', 'Klein'], ['medium', 'Mittel'], ['large', 'Groß']]} width={120} /></Row>
+            <Row label="Animationen"><Check label="Bewegungen reduzieren (keine Animationen)" value={p.reduceMotion} onChange={set('reduceMotion')} /></Row>
+            <Row label="Anime-Theme"><Check label="Fallende Kirschblüten auf dem Startbildschirm" value={p.sakuraPetals} onChange={set('sakuraPetals')} /></Row>
+            <Row label="QuickInfos"><Check label="QuickInfos (Tooltips) anzeigen" value={p.tooltips} onChange={set('tooltips')} /></Row>
+          </>}
+          {cat === 'tools' && <>
+            <h4>Werkzeuge</h4>
+            <Row label="Mausrad"><Sel value={p.wheelZoom ? 'zoom' : 'scroll'} onChange={(v) => set('wheelZoom')(v === 'zoom')} options={[['scroll', 'Scrollen (Strg/Alt + Rad = Zoom)'], ['zoom', 'Zoomen (Umschalt + Rad = Scrollen)']]} width={300} /></Row>
+            <Row label="Zoom"><Check label="Animiertes Zoomen" value={p.animatedZoom} onChange={set('animatedZoom')} /></Row>
+            <Row label="Malwerkzeug-Cursor"><Sel value={p.brushCursor} onChange={set('brushCursor')} options={[['normal', 'Pinselspitze (Kreis)'], ['both', 'Pinselspitze + Fadenkreuz'], ['cross', 'Präzise (Fadenkreuz)']]} width={240} /></Row>
+            <Row label="Grafiktablett"><Check label="Stiftdruck steuert Größe" value={p.pressureSize} onChange={set('pressureSize')} /><Check label="Stiftdruck steuert Deckkraft" value={p.pressureOpacity} onChange={set('pressureOpacity')} /></Row>
+            <Row label="Transformieren" hint="Umschalttaste kehrt das Verhalten jeweils um."><Check label="Ecken proportional skalieren" value={p.proportionalTransform} onChange={set('proportionalTransform')} /></Row>
+            <Row label="Pfeiltasten"><Num label="Umschalt + Pfeil:" value={p.nudgeStep} min={2} max={200} onChange={set('nudgeStep')} unit=" Px" width={56} /></Row>
+            <Row label="Einrasten"><Num label="Abstand:" value={p.snapDistance} min={1} max={30} onChange={set('snapDistance')} unit=" Px" width={50} /></Row>
+            <Row label="Werkzeugoptionen"><button className="btn small" onClick={() => resetToolOptions(true)}>Alle Werkzeuge zurücksetzen</button></Row>
+          </>}
+          {cat === 'perf' && <>
+            <h4>Leistung</h4>
+            <Row label="Filtervorschau" hint="Bei großen Bildern wird die Vorschau verkleinert berechnet – das Ergebnis wird immer in voller Auflösung angewendet."><Check label="Schnelle Vorschau bei großen Bildern" value={p.fastPreview} onChange={set('fastPreview')} /></Row>
+            <Row label="Grafikprozessor" hint="Änderung wird nach einem Neustart wirksam. Nur bei Darstellungsfehlern deaktivieren."><Check label="Hardwarebeschleunigung verwenden" value={p.hardwareAcceleration} onChange={(v) => { set('hardwareAcceleration')(v); if (window.native && window.native.setMainSetting) window.native.setMainSetting('hardwareAcceleration', v); }} /></Row>
+            <Row label="Protokoll" hint="Weniger Schritte = weniger Arbeitsspeicher."><Num value={p.historyStates} min={5} max={300} onChange={set('historyStates')} width={60} /></Row>
+          </>}
+          {cat === 'grid' && <>
+            <h4>Transparenz & Raster</h4>
+            <Row label="Schachbrett-Größe"><Sel value={p.checker} onChange={set('checker')} options={[['small', 'Klein'], ['medium', 'Mittel'], ['large', 'Groß']]} width={120} /></Row>
+            <Row label="Schachbrett-Farbe"><Sel value={p.checkerTone} onChange={set('checkerTone')} options={[['light', 'Hell'], ['medium', 'Mittel'], ['dark', 'Dunkel']]} width={120} /></Row>
+            <Row label="Raster"><Num label="Abstand:" value={p.gridSpacing} min={2} max={2000} onChange={set('gridSpacing')} unit=" Px" width={56} /><Num label="Unterteilungen:" value={p.gridSub} min={1} max={20} onChange={set('gridSub')} width={40} /></Row>
+            <Row label="Farben"><label className="chk">Raster <input type="color" className="color-in" value={p.gridColor} onChange={(e) => set('gridColor')(e.target.value)} /></label><label className="chk">Hilfslinien <input type="color" className="color-in" value={p.guideColor} onChange={(e) => set('guideColor')(e.target.value)} /></label></Row>
+            <Row label="Pixelraster"><Check label="Pixelraster ab 800 % Zoom anzeigen" value={p.pixelGrid} onChange={set('pixelGrid')} /></Row>
+          </>}
+          {cat === 'units' && <>
+            <h4>Einheiten & Lineale</h4>
+            <Row label="Lineale & Anzeige"><Sel value={p.units} onChange={set('units')} options={[['px', 'Pixel'], ['cm', 'Zentimeter'], ['mm', 'Millimeter'], ['in', 'Zoll'], ['pt', 'Punkt'], ['%', 'Prozent']]} width={160} /></Row>
+            <Row label="Auflösung neuer Dokumente"><Num value={p.defaultPpi} min={1} max={2400} onChange={set('defaultPpi')} unit=" ppi" width={64} /></Row>
+            {doc() && <Row label="Aktuelles Dokument" hint="Ändert nur die Angabe für Druck/Einheiten, nicht die Pixel."><Num value={doc().ppi} min={1} max={2400} onChange={(v) => { doc().ppi = v; view.request(); emit(); }} unit=" ppi" width={64} /></Row>}
+          </>}
+          {cat === 'files' && <>
+            <h4>Dateien</h4>
+            <Row label="Standard-Speicherordner" hint={p.saveDir ? '' : 'Standard: Desktop\\Sakura Studio\\Projekte'}>
+              <div className="row"><input className="path-in" readOnly value={p.saveDir || '(Standard)'} /><button className="btn small" onClick={chooseDir}>Ändern…</button>{p.saveDir && <button className="btn small" onClick={() => set('saveDir')('')}>Standard</button>}</div>
+            </Row>
+            <Row label="Export-Format (Schnell-Export)"><Sel value={p.exportFormat} onChange={set('exportFormat')} options={[['png', 'PNG'], ['jpeg', 'JPG'], ['webp', 'WebP']]} width={120} /></Row>
+            <Row label="JPG/WebP-Qualität"><Num value={p.jpgQuality} min={1} max={100} onChange={set('jpgQuality')} unit=" %" width={50} /></Row>
+          </>}
+          {cat === 'reset' && <>
+            <h4>Zurücksetzen</h4>
+            <Row label="Voreinstellungen"><button className="btn small" onClick={() => { Object.keys(p).forEach((k) => delete p[k]); Object.assign(p, DEFAULT_PREFS); savePrefs(); toast('Voreinstellungen zurückgesetzt'); }}>Alle Voreinstellungen zurücksetzen</button></Row>
+            <Row label="Werkzeuge"><button className="btn small" onClick={() => resetToolOptions(true)}>Alle Werkzeugoptionen zurücksetzen</button></Row>
+            <Row label="Farbfelder & Verläufe"><button className="btn small" onClick={() => { import('../state.js').then((m) => { S.swatches = [...m.DEFAULT_SWATCHES]; S.gradients = [...m.DEFAULT_GRADIENTS]; S.gradient.index = 0; saveSwatches(); toast('Farbfelder & Verläufe zurückgesetzt'); }); }}>Auf Standard zurücksetzen</button></Row>
+            <Row label="Arbeitsbereich"><button className="btn small" onClick={() => { S.ui.hiddenPanels = {}; S.ui.flyout = null; localStorage.removeItem('sakura.hiddenPanels'); emit(); toast('Arbeitsbereich zurückgesetzt'); }}>Bedienfelder zurücksetzen</button></Row>
+          </>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------- Auswählen und maskieren ----------------
+function SelectMaskDialog() {
+  const d = doc();
+  const orig = useRef(d && d.selection ? cloneCanvas(d.selection) : null);
+  const [smoothR, setSmooth] = useState(0), [featherR, setFeather] = useState(0), [shift, setShift] = useState(0), [out, setOut] = useState('selection');
+  const compute = () => {
+    let c = orig.current; if (!c) return null;
+    if (smoothR > 0) c = selSmooth(c, smoothR);
+    if (shift > 0) c = selExpand(c, shift * 0.5); else if (shift < 0) c = selContract(c, -shift * 0.5);
+    if (featherR > 0) c = selFeather(c, featherR);
+    return c;
+  };
+  useEffect(() => { if (!orig.current) return; const t = setTimeout(() => { const c = compute(); if (c) { d.setSelection(c); view.request(); } }, 60); return () => clearTimeout(t); }, [smoothR, featherR, shift]);
+  const cancel = () => { if (orig.current) { d.setSelection(orig.current); view.request(); } closeDialog(); };
+  const ok = () => {
+    closeDialog();
+    if (!orig.current) return;
+    if (out === 'mask') { L.addMask(true); d.deselect(); commit('Auswahl als Maske'); }
+    else if (out === 'layer') { L.viaCopy(false); }
+    else commit('Auswählen und maskieren');
+  };
+  if (!d) return null;
+  return (
+    <Modal title="Auswählen und maskieren" onOk={ok} onCancel={cancel} width={440}>
+      {!orig.current ? <div className="hint warn">Erstelle zuerst eine Auswahl (z. B. mit der Schnellauswahl W).</div> : <>
+        <div className="hint">Kante verfeinern – Änderungen sind sofort sichtbar.</div>
+        <ParamRow x={{ label: 'Abrunden', min: 0, max: 50 }} value={smoothR} onChange={setSmooth} />
+        <ParamRow x={{ label: 'Weiche Kante (Px)', min: 0, max: 100, step: 0.5 }} value={featherR} onChange={setFeather} />
+        <ParamRow x={{ label: 'Kante verschieben', min: -100, max: 100 }} value={shift} onChange={setShift} />
+        <label className="prow"><span>Ausgabe an</span><Sel value={out} onChange={setOut} options={[['selection', 'Auswahl'], ['mask', 'Ebenenmaske'], ['layer', 'Neue Ebene']]} width={180} /></label>
+      </>}
+    </Modal>
+  );
+}
+
+// ---------------- Wiederherstellung ----------------
+function RecoveryDialog({ dg }) {
+  const items = dg.items || [];
+  return (
+    <Modal title="Dokumente wiederherstellen" onCancel={async () => { if (window.native) await window.native.recoveryClear(); closeDialog(); }} onOk={() => { closeDialog(); restoreRecovery(items); }} okLabel="Wiederherstellen">
+      <p>Sakura Studio wurde nicht ordnungsgemäß beendet. Folgende ungespeicherte Dokumente können wiederhergestellt werden:</p>
+      <ul className="rec-list">{items.map((it) => { let n = it.name; try { n = JSON.parse(new TextDecoder().decode(new Uint8Array(it.data))).name; } catch (e) { /* */ } return <li key={it.name}>{n}</li>; })}</ul>
+      <div className="hint">„Abbrechen“ verwirft die Sicherungen.</div>
     </Modal>
   );
 }
 
 function AboutDialog() {
   return (
-    <Modal title="Über Sakura Studio" onCancel={closeDialog} width={440}>
+    <Modal title="Über Sakura Studio" onCancel={closeDialog} width={480}>
       <div className="about">
         <Logo size={64} />
         <h2>Sakura Studio</h2>
-        <div>Version 1.0.0 · Bildbearbeitung für Windows</div>
-        <p>Ebenen, Masken, Auswahlen, Pinsel, Retusche, Text, Formen, Pfade, über 50 Korrekturen & Filter, PSD-Import/-Export und vieles mehr – in einem Sakura-Design.</p>
-        <p className="muted">Arbeitsordner: Desktop\Sakura Studio\Projekte</p>
+        <div>Version 1.1.0 · Bildbearbeitung für Windows</div>
+        <p>Ebenen, Masken, Auswahlen, Pinsel, Retusche, Text, Formen, Pfade, über 50 Korrekturen & Filter, PSD-Import/-Export und mehr.</p>
+        <p className="muted">Arbeitsordner: Desktop\Sakura Studio\Projekte · Einstellungen: Bearbeiten › Voreinstellungen (Strg+K)</p>
+        <details className="licenses"><summary>Open-Source-Komponenten</summary>
+          <ul>
+            <li>Electron – MIT-Lizenz</li><li>Chromium – BSD-Lizenz u. a. (siehe LICENSES.chromium.html im Programmordner)</li>
+            <li>React, React DOM – MIT-Lizenz</li><li>ag-psd – MIT-Lizenz</li><li>Vite – MIT-Lizenz (nur Entwicklung)</li>
+          </ul>
+        </details>
       </div>
     </Modal>
   );
@@ -453,6 +616,7 @@ function FeaturesDialog() {
     ['Korrekturen', 'Helligkeit/Kontrast, Tonwertkorrektur, Gradationskurven (RGB & Kanäle), Belichtung, Dynamik, Farbton/Sättigung, Farbbalance, Schwarzweiß, Fotofilter, Kanalmixer, Umkehren, Tontrennung, Schwellenwert, Verlaufsumsetzung, Selektive Farbkorrektur, Tiefen/Lichter, HDR-Tonung, Sättigung verringern, Farbe ersetzen, Tonwertangleichung, Auto-Farbton/-Kontrast/-Farbe'],
     ['Filter', 'Gaußscher Weichzeichner, Bewegungsunschärfe, Radialer Weichzeichner, Tilt-Shift, Matter machen, Durchschnitt, Scharfzeichnen, Unscharf maskieren, Rauschen hinzufügen/entfernen, Median, Relief, Konturen finden, Leuchtende Konturen, Solarisation, Ölfarbe, Strudel, Wölben, Distorsion, Welle, Kräuseln, Polarkoordinaten, Verflüssigen, Mosaik, Kristallisieren, Farbraster, Wolken, Blendenflecke, Vignette, Hochpass, Verschiebungseffekt, Min/Max'],
     ['Text, Formen & Pfade', 'Horizontaler/vertikaler Text, Schriftart, Größe, Farbe, Fett/Kursiv/Unterstrichen/Durchgestrichen/Großbuchstaben, Zeilenabstand, Laufweite, Ausrichtung; Rechteck, abgerundetes Rechteck, Ellipse, Dreieck, Polygon, Stern, Herz, Kirschblüte, Pfeil, Sprechblase, Linie mit Pfeilspitze; Zeichenstift, Freiform-Zeichenstift, Direktauswahl, Pfad füllen/Kontur/als Auswahl'],
+    ['Themes & Einstellungen', 'Dunkel, Hell, Wie System, Anime · Sakura-Nacht, Anime · Sakura-Tag, 7 Akzentfarben, UI-Skalierung, reduzierte Bewegung; Voreinstellungen für Autosave/Wiederherstellung, Protokolltiefe, Mausrad-Zoom, Pinselcursor, Stiftdruck, Transformieren, Leistung, Schachbrett, Raster, Hilfslinien, Einheiten (Px, cm, mm, Zoll, Pt, %), Speicherordner und Export'],
     ['Ansicht & Arbeitsbereich', 'Zoom, Hand, Navigator, Lineale, Hilfslinien (aus Linealen ziehen), Raster, Einrasten, Pixelraster, Kanalansicht, Bildschirmmodi, Protokoll mit Rücksprung, Info mit Histogramm, Farb-, Farbfeld-, Verlaufs-, Muster-, Bibliotheks-, Pinsel-, Zeichen- und Absatz-Bedienfelder, mehrere Dokumente als Reiter'],
   ];
   return (
