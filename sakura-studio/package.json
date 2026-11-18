@@ -1,0 +1,71 @@
+{
+  "name": "sakura-studio",
+  "productName": "Sakura Studio",
+  "version": "1.0.0",
+  "description": "Sakura Studio – Bildbearbeitung",
+  "author": "Sakura Studio",
+  "main": "electron/main.cjs",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "dist": "vite build && electron-builder --win nsis portable --x64"
+  },
+  "build": {
+    "appId": "de.sakurastudio.app",
+    "productName": "Sakura Studio",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Sakura Studio",
+      "include": "build/installer.nsh",
+      "artifactName": "Sakura-Studio-Setup-${version}.${ext}",
+      "language": "1031",
+      "installerLanguages": [
+        "de_DE"
+      ]
+    },
+    "portable": {
+      "artifactName": "Sakura-Studio-Portable-${version}.${ext}"
+    },
+    "fileAssociations": [
+      {
+        "ext": "sakura",
+        "name": "Sakura Studio Projekt",
+        "description": "Sakura Studio Projekt"
+      }
+    ],
+    "afterPack": "build/afterPack.mjs"
+  },
+  "dependencies": {
+    "ag-psd": "^22.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "resedit": "^2.0.3",
+    "vite": "^5.4.11"
+  }
+}
