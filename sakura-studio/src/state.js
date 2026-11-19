@@ -1,9 +1,13 @@
 // Globaler Zustand + Aktionen
 import { useSyncExternalStore } from 'react';
-import { Doc, Layer, createDoc, docFromImage, composite, flattenToCanvas, renderTextLayer, layerProps, applyLayerProps, getMerged } from './engine/doc.js';
+import { Doc, Layer, createDoc, docFromImage, composite, flattenToCanvas, renderTextLayer, layerProps, applyLayerProps, getMerged, normalizeTree, childrenOf, descendants, effectiveVisible } from './engine/doc.js';
+import { ADJUSTMENTS, FILTERS } from './engine/filters.js';
 import { makeCanvas, ctx2d, cloneCanvas, alphaBounds, loadImage, canvasToBytes, hexToRgb, luminance } from './engine/util.js';
 import * as SEL from './engine/selection.js';
-import { readPsd, writePsd } from './io/psd.js';
+import { readPsd, writePsd, psdWarnings } from './io/psd.js';
+import { drawStarPath, drawHeartPath, drawBlossom, renderShapeLayer } from './engine/shapes.js';
+import { drawMesh, meshMapFor, gridFromCorners } from './engine/mesh.js';
+export { drawStarPath, drawHeartPath, drawBlossom };
 
 const listeners = new Set();
 let version = 0;
@@ -70,7 +74,7 @@ export const S = {
   fill: { tolerance: 32, contiguous: true, sampleAll: false, source: 'fg', opacity: 1, mode: 'normal', pattern: 'sakura' },
   gradient: { index: 0, type: 'linear', reverse: false, opacity: 1, mode: 'normal', transparency: true },
   text: { font: 'Segoe UI', size: 64, color: null, bold: false, italic: false, underline: false, strike: false, caps: false, align: 'left', leading: 1.2, tracking: 0, vertical: false, aa: true },
-  shape: { fill: true, stroke: false, strokeWidth: 4, strokeColor: '#ffffff', radius: 24, sides: 5, lineWidth: 6, arrow: false, starInner: 0.45 },
+  shape: { mode: 'shape', fill: true, stroke: false, strokeWidth: 4, strokeColor: '#ffffff', radius: 24, sides: 5, lineWidth: 6, arrow: false, starInner: 0.45 },
   move: { autoSelect: false, showTransform: false },
   eyedrop: { sample: 1, allLayers: true },
   crop: { ratio: 'free', deleteCropped: true },
@@ -343,6 +347,8 @@ export async function saveProject(saveAs = false) {
 export async function exportPsd(path) {
   const d = doc(); if (!d) return;
   const bytes = writePsd(d);
+  const warn = psdWarnings();
+  if (warn.length) setTimeout(() => toast('Hinweis: ' + warn.join(', '), 5000), 400);
   const base = d.name.replace(/\.[^.]+$/, '');
   const p = await saveBytes(base + '.psd', bytes, [{ name: 'Photoshop (PSD)', extensions: ['psd'] }], path || null);
   if (!p) return;
@@ -394,7 +400,12 @@ export async function serializeProject(d) {
   return JSON.stringify({
     app: 'Sakura Studio', version: 1, w: d.w, h: d.h, name: d.name, active: d.active, ppi: d.ppi,
     guides: d.guides, paths: d.paths,
-    layers: d.layers.map((l) => ({ props: layerProps(l), png: toUrl(l.canvas), mask: l.mask ? toUrl(l.mask) : null })),
+    layers: d.layers.map((l) => {
+      const props = layerProps(l);
+      const smartSrc = props.smart ? toUrl(props.smart.src) : null;
+      if (props.smart) props.smart = { ...props.smart, src: null };
+      return { id: l.id, props, png: l.hasPixels ? toUrl(l.canvas) : null, mask: l.mask ? toUrl(l.mask) : null, smartSrc };
+    }),
     alpha: d.alphaChannels.map((a) => ({ name: a.name, png: toUrl(a.canvas) })),
   });
 }
@@ -405,13 +416,20 @@ async function loadProject(text, name) {
   d.ppi = j.ppi || 72;
   d.guides = j.guides || [];
   d.paths = j.paths || [];
+  const idMap = new Map();
   for (const e of j.layers) {
     const l = new Layer(j.w, j.h);
+    if (e.props.smart && e.smartSrc) { const img = await loadImage(e.smartSrc); const c = makeCanvas(img.width, img.height); ctx2d(c).drawImage(img, 0, 0); e.props.smart.src = c; }
+    else if (e.props.smart) e.props.smart = null;
     applyLayerProps(l, e.props);
-    l.ctx.drawImage(await loadImage(e.png), 0, 0);
+    if (e.png) l.ctx.drawImage(await loadImage(e.png), 0, 0);
     if (e.mask) { l.mask = makeCanvas(j.w, j.h); ctx2d(l.mask).drawImage(await loadImage(e.mask), 0, 0); }
+    if (e.id != null) idMap.set(e.id, l.id);
     d.layers.push(l);
   }
+  // Gruppen-Verweise auf neue IDs umstellen
+  d.layers.forEach((l) => { if (l.parent != null) l.parent = idMap.get(l.parent) ?? null; });
+  d.layers = normalizeTree(d.layers);
   for (const a of j.alpha || []) { const c = makeCanvas(j.w, j.h); ctx2d(c).drawImage(await loadImage(a.png), 0, 0); d.alphaChannels.push({ name: a.name, canvas: c }); }
   d.active = Math.min(j.active || 0, d.layers.length - 1);
   d.commit('Öffnen');
@@ -437,65 +455,190 @@ export function layerOp(fn, name) {
 
 export function canEditPixels(l, quiet) {
   if (!l) return false;
+  if (l.type === 'group') { if (!quiet) toast('Gruppe gewählt – bitte eine Ebene in der Gruppe wählen'); return false; }
+  if (l.type === 'adjust') { if (!quiet) toast('Einstellungsebene – bearbeite die Werte im Eigenschaften-Bedienfeld oder male in die Maske'); return false; }
+  if (l.type === 'smart') { if (!quiet) toast('Smart-Objekt – zum Malen zuerst rastern (Ebene › Rastern)'); return false; }
   if (l.lockAll || l.lockPixels) { if (!quiet) toast('Ebene ist fixiert 🔒'); return false; }
-  if (!l.visible) { if (!quiet) toast('Ebene ist ausgeblendet'); return false; }
-  if (l.type === 'text') rasterize(l);
+  const d = doc();
+  if (d && !effectiveVisible(d.layers, l)) { if (!quiet) toast('Ebene ist ausgeblendet'); return false; }
+  if (l.type === 'text' || l.type === 'shape') { rasterize(l); if (!quiet) toast('Ebene wurde gerastert'); }
   return true;
 }
 
 export function rasterize(l) {
-  if (l.type === 'text') { l.type = 'raster'; l.text = null; l.touch(); }
+  if (l.type === 'text' || l.type === 'shape' || l.type === 'smart') { l.type = 'raster'; l.text = null; l.shape = null; l.smart = null; l.touch(); }
 }
 
+// Smart-Objekt aus Quelle + Transformation (+ Smartfilter) neu zeichnen
+export function renderSmartLayer(l, w, h, noFilters) {
+  const sm = l.smart; if (!sm) return;
+  const t = sm.t;
+  const x = ctx2d(l.canvas);
+  x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, w, h);
+  x.imageSmoothingQuality = 'high';
+  if (t.mesh) { x.restore(); drawMesh(x, sm.src, meshMapFor(t), t.mesh === 'warp' ? 24 : 16); }
+  else {
+    x.translate(t.cx, t.cy); x.rotate(t.rot || 0); x.transform(1, 0, Math.tan(t.skx || 0), 1, 0, 0); x.scale(t.sx, t.sy);
+    x.drawImage(sm.src, -sm.src.width / 2, -sm.src.height / 2);
+    x.restore();
+  }
+  if (!noFilters) for (const f of sm.filters || []) {
+    if (!f.on) continue;
+    const def = (f.kind === 'adjust' ? ADJUSTMENTS : FILTERS)[f.id]; if (!def) continue;
+    const out = def.apply(cloneCanvas(l.canvas), f.params || {});
+    x.clearRect(0, 0, w, h); x.drawImage(out, 0, 0);
+  }
+  l.touch();
+}
+
+// Baum-Reihenfolge wiederherstellen, aktive Ebene behalten
+function settle(d, activeLayer) {
+  d.layers = normalizeTree(d.layers);
+  const i = d.layers.indexOf(activeLayer || d.layer);
+  d.active = i >= 0 ? i : Math.min(d.active, d.layers.length - 1);
+}
+function insertAbove(d, n, ref) {
+  ref = ref || d.layer;
+  n.parent = ref ? ref.parent : null;
+  const i = ref ? d.layers.indexOf(ref) + 1 : d.layers.length;
+  d.layers.splice(i, 0, n);
+  settle(d, n);
+  return n;
+}
+// Geschwister in Baum-Reihenfolge (unten → oben)
+function siblings(d, l) { return d.layers.filter((x) => (x.parent || null) === (l.parent || null)); }
+function cloneSubtree(d, l, newParent) {
+  const n = new Layer(d.w, d.h, l.name);
+  applyLayerProps(n, layerProps(l));
+  n.isBackground = false; n.lockPosition = false; n.parent = newParent;
+  n.ctx.drawImage(l.canvas, 0, 0);
+  if (l.mask) n.mask = cloneCanvas(l.mask);
+  const out = [n];
+  if (l.type === 'group') childrenOf(d.layers, l.id).forEach((c) => out.push(...cloneSubtree(d, c, n.id)));
+  return out;
+}
+// Teilbaum als Pixel-Ebene rendern
+function renderSubtree(d, l) {
+  const c = makeCanvas(d.w, d.h);
+  const sub = [l, ...(l.type === 'group' ? descendants(d.layers, l) : [])].map((x) => x);
+  const fake = { w: d.w, h: d.h, active: 0, channelView: null, layers: normalizeTree(sub.map((x) => Object.assign(Object.create(Object.getPrototypeOf(x)), x, { parent: x === l ? null : x.parent }))) };
+  composite(fake, c, { noChannels: true });
+  return c;
+}
+
+export const ADJ_LAYER_TYPES = ['brightness', 'levels', 'curves', 'exposure', 'vibrance', 'hueSat', 'colorBalance', 'blackWhite', 'photoFilter', 'channelMixer', 'invert', 'posterize', 'threshold', 'gradientMap', 'selectiveColor'];
+
 export const L = {
-  add: () => layerOp((d) => { d.newLayer(); }, 'Neue Ebene'),
+  add: () => layerOp((d) => { insertAbove(d, new Layer(d.w, d.h, `Ebene ${d.layers.length}`)); }, 'Neue Ebene'),
   duplicate: () => layerOp((d, l) => {
-    const n = new Layer(d.w, d.h, l.name + ' Kopie');
-    applyLayerProps(n, layerProps(l));
-    n.name = l.name + ' Kopie'; n.isBackground = false; n.lockPosition = false;
-    n.ctx.drawImage(l.canvas, 0, 0);
-    if (l.mask) n.mask = cloneCanvas(l.mask);
-    d.addLayer(n);
+    const items = cloneSubtree(d, l, l.parent);
+    items[0].name = l.name + ' Kopie';
+    const i = d.layers.indexOf(l) + 1;
+    d.layers.splice(i, 0, ...items);
+    settle(d, items[0]);
   }, 'Ebene duplizieren'),
-  remove: () => layerOp((d) => {
-    if (d.layers.length <= 1) { toast('Die letzte Ebene kann nicht gelöscht werden'); return false; }
-    d.layers.splice(d.active, 1);
-    d.active = Math.max(0, d.active - 1);
+  remove: () => layerOp((d, l) => {
+    const kill = new Set([l, ...(l.type === 'group' ? descendants(d.layers, l) : [])]);
+    if (d.layers.length - kill.size < 1) { toast('Die letzte Ebene kann nicht gelöscht werden'); return false; }
+    const idx = d.active;
+    d.layers = d.layers.filter((x) => !kill.has(x));
+    d.active = Math.max(0, Math.min(idx - kill.size + 1, d.layers.length - 1));
+    if (d.active > 0 && !d.layers[d.active]) d.active = d.layers.length - 1;
+    settle(d, d.layers[Math.max(0, Math.min(d.active, d.layers.length - 1))]);
   }, 'Ebene löschen'),
   viaCopy: (cut) => layerOp((d, l) => {
+    if (!l.hasPixels) { toast('Diese Ebene enthält keine Pixel'); return false; }
     const n = new Layer(d.w, d.h, cut ? 'Ebene durch Ausschneiden' : 'Ebene durch Kopie');
     n.ctx.drawImage(l.canvas, 0, 0);
     if (d.selection) {
       const x = n.ctx; x.globalCompositeOperation = 'destination-in'; x.drawImage(d.selection, 0, 0);
       if (cut && canEditPixels(l)) { const lx = l.ctx; lx.save(); lx.globalCompositeOperation = 'destination-out'; lx.drawImage(d.selection, 0, 0); lx.restore(); l.touch(); }
     }
-    d.addLayer(n);
+    insertAbove(d, n, l);
   }, cut ? 'Ebene durch Ausschneiden' : 'Ebene durch Kopie'),
-  moveUp: () => layerOp((d) => { if (d.active >= d.layers.length - 1) return false; const [l] = d.layers.splice(d.active, 1); d.layers.splice(d.active + 1, 0, l); d.active++; }, 'Anordnen'),
-  moveDown: () => layerOp((d) => { if (d.active <= 0) return false; const [l] = d.layers.splice(d.active, 1); d.layers.splice(d.active - 1, 0, l); d.active--; }, 'Anordnen'),
-  toTop: () => layerOp((d) => { const [l] = d.layers.splice(d.active, 1); d.layers.push(l); d.active = d.layers.length - 1; }, 'In den Vordergrund'),
-  toBottom: () => layerOp((d) => { const [l] = d.layers.splice(d.active, 1); d.layers.unshift(l); d.active = 0; }, 'In den Hintergrund'),
-  reorder: (from, to) => layerOp((d) => { const [l] = d.layers.splice(from, 1); d.layers.splice(to, 0, l); d.active = to; }, 'Ebenen anordnen'),
-  mergeDown: () => layerOp((d) => {
-    if (d.active === 0) { toast('Keine Ebene darunter'); return false; }
-    const top = d.layers[d.active], below = d.layers[d.active - 1];
-    const tmp = { ...d, layers: [below, top], channelView: null };
+  // Anordnen innerhalb der Geschwister
+  moveUp: () => layerOp((d, l) => {
+    const sib = siblings(d, l); const i = sib.indexOf(l);
+    if (i < sib.length - 1) { const other = sib[i + 1]; const ia = d.layers.indexOf(l), ib = d.layers.indexOf(other); d.layers[ia] = other; d.layers[ib] = l; }
+    else if (l.parent) { const g = d.layers.find((x) => x.id === l.parent); l.parent = g.parent; d.layers.splice(d.layers.indexOf(l), 1); d.layers.splice(d.layers.indexOf(g) + 1, 0, l); }
+    else return false;
+    settle(d, l);
+  }, 'Anordnen'),
+  moveDown: () => layerOp((d, l) => {
+    const sib = siblings(d, l); const i = sib.indexOf(l);
+    if (i > 0) { const other = sib[i - 1]; const ia = d.layers.indexOf(l), ib = d.layers.indexOf(other); d.layers[ia] = other; d.layers[ib] = l; }
+    else if (l.parent) { const g = d.layers.find((x) => x.id === l.parent); l.parent = g.parent; d.layers.splice(d.layers.indexOf(l), 1); d.layers.splice(d.layers.indexOf(g), 0, l); }
+    else return false;
+    settle(d, l);
+  }, 'Anordnen'),
+  toTop: () => layerOp((d, l) => { d.layers.splice(d.layers.indexOf(l), 1); d.layers.push(l); settle(d, l); }, 'In den Vordergrund'),
+  toBottom: () => layerOp((d, l) => { d.layers.splice(d.layers.indexOf(l), 1); d.layers.unshift(l); settle(d, l); }, 'In den Hintergrund'),
+  // Ziehen im Ebenen-Bedienfeld: über/unter Ziel oder in eine Gruppe hinein
+  dropOn: (from, target, where) => layerOp((d) => {
+    if (!from || !target || from === target) return false;
+    if (from.type === 'group' && (target === from || descendants(d.layers, from).includes(target))) { toast('Gruppe kann nicht in sich selbst verschoben werden'); return false; }
+    d.layers.splice(d.layers.indexOf(from), 1);
+    if (where === 'into' && target.type === 'group') { from.parent = target.id; d.layers.splice(d.layers.indexOf(target), 0, from); target.collapsed = false; }
+    else { from.parent = target.parent; const ti = d.layers.indexOf(target); d.layers.splice(where === 'above' ? ti + 1 : ti, 0, from); }
+    settle(d, from);
+  }, 'Ebenen anordnen'),
+  reorder: (from, to) => layerOp((d) => { const [l] = d.layers.splice(from, 1); d.layers.splice(to, 0, l); settle(d, l); }, 'Ebenen anordnen'),
+  // ---- Gruppen ----
+  newGroup: () => layerOp((d) => {
+    const g = new Layer(d.w, d.h, `Gruppe ${d.layers.filter((x) => x.type === 'group').length + 1}`);
+    g.type = 'group'; g.blend = 'pass';
+    insertAbove(d, g);
+  }, 'Neue Gruppe'),
+  group: () => layerOp((d, l) => {
+    const g = new Layer(d.w, d.h, `Gruppe ${d.layers.filter((x) => x.type === 'group').length + 1}`);
+    g.type = 'group'; g.blend = 'pass'; g.parent = l.parent;
+    d.layers.splice(d.layers.indexOf(l) + 1, 0, g);
+    l.parent = g.id;
+    if (l.isBackground) { l.isBackground = false; l.lockPosition = false; }
+    settle(d, g);
+  }, 'Ebenen gruppieren'),
+  ungroup: () => layerOp((d, g) => {
+    if (g.type !== 'group') { toast('Keine Gruppe ausgewählt'); return false; }
+    const kids = childrenOf(d.layers, g.id);
+    kids.forEach((k) => { k.parent = g.parent; });
+    d.layers.splice(d.layers.indexOf(g), 1);
+    settle(d, kids[kids.length - 1] || d.layers[0]);
+  }, 'Gruppierung aufheben'),
+  toggleCollapse: (g) => { g.collapsed = !g.collapsed; emit(); },
+  // ---- Zusammenfügen ----
+  mergeDown: () => layerOp((d, top) => {
+    if (top.type === 'group') {
+      const c = renderSubtree(d, top);
+      const n = new Layer(d.w, d.h, top.name); n.parent = top.parent; n.ctx.drawImage(c, 0, 0);
+      const kill = new Set([top, ...descendants(d.layers, top)]);
+      const i = d.layers.indexOf(top);
+      d.layers.splice(i, 0, n);
+      d.layers = d.layers.filter((x) => !kill.has(x));
+      settle(d, n);
+      return;
+    }
+    const sib = siblings(d, top); const si = sib.indexOf(top);
+    if (si <= 0) { toast('Keine Ebene darunter'); return false; }
+    const below = sib[si - 1];
+    if (!below.hasPixels || below.type === 'group') { toast('Darunter liegt keine Pixelebene'); return false; }
+    const tmpd = { w: d.w, h: d.h, active: 0, layers: [Object.assign(Object.create(Object.getPrototypeOf(below)), below, { parent: null }), Object.assign(Object.create(Object.getPrototypeOf(top)), top, { parent: null })], channelView: null };
     const c = makeCanvas(d.w, d.h);
-    composite(tmp, c, { noChannels: true });
+    composite(tmpd, c, { noChannels: true });
     rasterize(below);
     below.ctx.clearRect(0, 0, d.w, d.h); below.ctx.drawImage(c, 0, 0);
     below.opacity = 1; below.blend = 'normal'; below.fx = {}; below.mask = null; below.fill = 1; below.touch();
-    d.layers.splice(d.active, 1); d.active--;
+    d.layers.splice(d.layers.indexOf(top), 1);
+    settle(d, below);
   }, 'Auf eine Ebene reduzieren'),
   mergeVisible: () => layerOp((d) => {
-    const c = makeCanvas(d.w, d.h); composite({ ...d, channelView: null }, c, { noChannels: true });
-    const vis = d.layers.filter((l) => l.visible);
+    const vis = d.layers.filter((l) => effectiveVisible(d.layers, l) && l.type !== 'group');
     if (vis.length < 2) return false;
+    const c = makeCanvas(d.w, d.h); composite({ w: d.w, h: d.h, layers: d.layers, active: d.active, channelView: null }, c, { noChannels: true });
     const n = new Layer(d.w, d.h, 'Zusammengefügt'); n.ctx.drawImage(c, 0, 0);
-    const idx = d.layers.indexOf(vis[vis.length - 1]);
-    d.layers = d.layers.filter((l) => !l.visible || l === vis[vis.length - 1]);
-    const at = d.layers.indexOf(vis[vis.length - 1]);
-    d.layers[at] = n; d.active = at; void idx;
+    const kill = new Set(d.layers.filter((l) => effectiveVisible(d.layers, l)));
+    const keep = d.layers.filter((l) => !kill.has(l) && !(l.type === 'group' && !descendants(d.layers, l).length && kill.has(l)));
+    d.layers = [...keep.filter((l) => !l.parent || keep.some((g) => g.id === l.parent)), n];
+    settle(d, n);
   }, 'Sichtbare auf eine Ebene reduzieren'),
   flatten: () => layerOp((d) => {
     const c = flattenToCanvas(d, '#ffffff');
@@ -503,9 +646,10 @@ export const L = {
     d.layers = [n]; d.active = 0;
   }, 'Auf Hintergrundebene reduzieren'),
   stampVisible: () => layerOp((d) => {
-    const c = makeCanvas(d.w, d.h); composite({ ...d, channelView: null }, c, { noChannels: true });
-    const n = new Layer(d.w, d.h, 'Stempel sichtbar'); n.ctx.drawImage(c, 0, 0); d.layers.push(n); d.active = d.layers.length - 1;
+    const c = makeCanvas(d.w, d.h); composite({ w: d.w, h: d.h, layers: d.layers, active: d.active, channelView: null }, c, { noChannels: true });
+    const n = new Layer(d.w, d.h, 'Stempel sichtbar'); n.ctx.drawImage(c, 0, 0); d.layers.push(n); settle(d, n);
   }, 'Sichtbare stempeln'),
+  // ---- Masken ----
   addMask: (fromSel = true, hideAll = false) => layerOp((d, l) => {
     if (l.mask) { toast('Ebene hat bereits eine Maske'); return false; }
     l.mask = makeCanvas(d.w, d.h);
@@ -517,7 +661,8 @@ export const L = {
   }, 'Ebenenmaske hinzufügen'),
   deleteMask: () => layerOp((d, l) => { if (!l.mask) return false; l.mask = null; l.editMask = false; l.touch(); }, 'Ebenenmaske löschen'),
   applyMask: () => layerOp((d, l) => {
-    if (!l.mask) return false;
+    if (!l.mask || !l.hasPixels) return false;
+    if (l.type !== 'raster') rasterize(l);
     const x = l.ctx; x.globalCompositeOperation = 'destination-in'; x.drawImage(l.mask, 0, 0); x.globalCompositeOperation = 'source-over';
     l.mask = null; l.editMask = false; l.touch();
   }, 'Ebenenmaske anwenden'),
@@ -526,13 +671,89 @@ export const L = {
     const n = makeCanvas(d.w, d.h); const x = ctx2d(n); x.fillStyle = '#fff'; x.fillRect(0, 0, d.w, d.h);
     x.globalCompositeOperation = 'destination-out'; x.drawImage(l.mask, 0, 0); l.mask = n; l.touch();
   }, 'Maske umkehren'),
-  toggleClip: () => layerOp((d, l) => { if (d.active === 0) return false; l.clip = !l.clip; l.touch(); }, 'Schnittmaske'),
-  rasterize: () => layerOp((d, l) => { if (l.type !== 'text') return false; rasterize(l); }, 'Ebene rastern'),
+  toggleClip: () => layerOp((d, l) => { if (siblings(d, l).indexOf(l) <= 0) { toast('Keine Ebene darunter'); return false; } l.clip = !l.clip; l.touch(); }, 'Schnittmaske'),
+  rasterize: () => layerOp((d, l) => {
+    if (l.type === 'group') { L.mergeDown(); return false; }
+    if (l.type === 'adjust') { toast('Einstellungsebenen enthalten keine Pixel'); return false; }
+    if (l.type === 'raster') { toast('Ebene ist bereits eine Pixelebene'); return false; }
+    if (l.type === 'smart') renderSmartLayer(l, d.w, d.h);
+    rasterize(l);
+  }, 'Ebene rastern'),
   fromBackground: () => layerOp((d, l) => { l.isBackground = false; l.lockPosition = false; if (l.name === 'Hintergrund') l.name = 'Ebene 0'; l.touch(); }, 'Ebene aus Hintergrund'),
+  // ---- Einstellungsebenen ----
+  adjustLayer: (id) => layerOp((d) => {
+    const def = ADJUSTMENTS[id]; if (!def) return false;
+    const n = new Layer(d.w, d.h, def.name.replace('…', ''));
+    n.type = 'adjust';
+    n.adjust = { id, params: Object.fromEntries(def.params.map((p) => [p.key, p.def])) };
+    if (id === 'curves') Object.assign(n.adjust.params, { rgb: [[0, 0], [255, 255]], r: [[0, 0], [255, 255]], g: [[0, 0], [255, 255]], b: [[0, 0], [255, 255]] });
+    n.mask = makeCanvas(d.w, d.h);
+    const mx = ctx2d(n.mask);
+    if (d.selection) mx.drawImage(d.selection, 0, 0); else { mx.fillStyle = '#fff'; mx.fillRect(0, 0, d.w, d.h); }
+    insertAbove(d, n);
+    S.ui.panelTabs.props = 'props'; delete S.ui.hiddenPanels.props;
+  }, 'Neue Einstellungsebene'),
+  // ---- Smart-Objekte ----
+  toSmart: () => layerOp((d, l) => {
+    if (l.type === 'smart') { toast('Ist bereits ein Smart-Objekt'); return false; }
+    if (!l.hasPixels && l.type !== 'group') { toast('Diese Ebene kann kein Smart-Objekt werden'); return false; }
+    let src = l.type === 'group' ? renderSubtree(d, l) : cloneCanvas(l.canvas);
+    const b = alphaBounds(src);
+    if (!b) { toast('Ebene ist leer'); return false; }
+    const piece = makeCanvas(b.w, b.h); ctx2d(piece).drawImage(src, -b.x, -b.y);
+    let target = l;
+    if (l.type === 'group') {
+      const n = new Layer(d.w, d.h, l.name); n.parent = l.parent;
+      const kill = new Set([l, ...descendants(d.layers, l)]);
+      d.layers.splice(d.layers.indexOf(l), 0, n);
+      d.layers = d.layers.filter((x) => !kill.has(x));
+      target = n;
+    }
+    target.type = 'smart'; target.text = null; target.shape = null; target.isBackground = false; target.lockPosition = false;
+    target.smart = { src: piece, name: l.name, t: { cx: b.x + b.w / 2, cy: b.y + b.h / 2, sx: 1, sy: 1, rot: 0, skx: 0 }, filters: [] };
+    renderSmartLayer(target, d.w, d.h);
+    settle(d, target);
+  }, 'In Smart-Objekt konvertieren'),
+  editSmart: () => {
+    const d = doc(); const l = d && d.layer; if (!l || l.type !== 'smart') { toast('Kein Smart-Objekt gewählt'); return; }
+    const nd = createDoc({ w: l.smart.src.width, h: l.smart.src.height, name: (l.smart.name || l.name) + '.psb', background: 'transparent' });
+    nd.layers[0].ctx.drawImage(l.smart.src, 0, 0); nd.layers[0].name = l.name; nd.layers[0].touch(); nd.commit('Inhalt');
+    nd.smartLink = { docId: d.id, layerId: l.id };
+    addDoc(nd);
+    toast('Bearbeite den Inhalt und wähle dann „Ebene › Smart-Objekt › Inhalt übernehmen“');
+  },
+  commitSmart: () => {
+    const nd = doc(); if (!nd || !nd.smartLink) { toast('Dieses Dokument ist kein Smart-Objekt-Inhalt'); return; }
+    const pd = S.docs.find((x) => x.id === nd.smartLink.docId);
+    const l = pd && pd.layers.find((x) => x.id === nd.smartLink.layerId);
+    if (!l || !l.smart) { toast('Ursprüngliches Smart-Objekt nicht gefunden'); return; }
+    l.smart = { ...l.smart, src: flattenToCanvas(nd) };
+    renderSmartLayer(l, pd.w, pd.h);
+    nd.dirty = false;
+    S.activeId = pd.id; pd.commit('Smart-Objekt aktualisiert');
+    closeDoc(nd.id, true);
+    view.request(); emit();
+  },
+  replaceSmart: async () => {
+    const d = doc(); const l = d && d.layer; if (!l || l.type !== 'smart') { toast('Kein Smart-Objekt gewählt'); return; }
+    let files;
+    if (window.native) files = await window.native.openDialog({ title: 'Inhalt ersetzen', filters: [IMG_FILTERS[3]] });
+    else files = await pickFileBrowser('image/*');
+    const f = files[0]; if (!f) return;
+    const img = await loadImage(URL.createObjectURL(new Blob([f.data], { type: mimeFor(f.name) })));
+    const c = makeCanvas(img.width, img.height); ctx2d(c).drawImage(img, 0, 0);
+    const ow = l.smart.src.width, oh = l.smart.src.height;
+    const k = Math.min(ow / img.width, oh / img.height);
+    l.smart = { ...l.smart, src: c, t: { ...l.smart.t, sx: l.smart.t.sx * k, sy: l.smart.t.sy * k } };
+    renderSmartLayer(l, d.w, d.h); commit('Inhalt ersetzen');
+  },
+  toggleSmartFilter: (l, i) => { const f = l.smart.filters[i]; f.on = !f.on; const d = doc(); renderSmartLayer(l, d.w, d.h); commit('Smartfilter'); },
+  removeSmartFilter: (l, i) => { l.smart.filters.splice(i, 1); const d = doc(); renderSmartLayer(l, d.w, d.h); commit('Smartfilter löschen'); },
+  // ---- Füllebenen ----
   fillLayer: (color) => layerOp((d) => {
     const n = new Layer(d.w, d.h, 'Farbfüllung 1'); const x = n.ctx; x.fillStyle = color || S.fg; x.fillRect(0, 0, d.w, d.h);
-    if (d.selection) { n.mask = cloneCanvas(d.selection); }
-    d.addLayer(n);
+    n.mask = makeCanvas(d.w, d.h); const mx = ctx2d(n.mask); if (d.selection) mx.drawImage(d.selection, 0, 0); else { mx.fillStyle = '#fff'; mx.fillRect(0, 0, d.w, d.h); }
+    insertAbove(d, n);
   }, 'Neue Füllebene'),
   gradientLayer: () => layerOp((d) => {
     const n = new Layer(d.w, d.h, 'Verlaufsfüllung 1'); const x = n.ctx;
@@ -540,13 +761,13 @@ export const L = {
     gradientStops(S.gradients[S.gradient.index]).forEach((s) => g.addColorStop(s.p, s.c));
     x.fillStyle = g; x.fillRect(0, 0, d.w, d.h);
     if (d.selection) n.mask = cloneCanvas(d.selection);
-    d.addLayer(n);
+    insertAbove(d, n);
   }, 'Neue Verlaufsfüllung'),
   patternLayer: () => layerOp((d) => {
     const n = new Layer(d.w, d.h, 'Musterfüllung 1'); const x = n.ctx;
     x.fillStyle = x.createPattern(patternCanvas(S.fill.pattern), 'repeat'); x.fillRect(0, 0, d.w, d.h);
     if (d.selection) n.mask = cloneCanvas(d.selection);
-    d.addLayer(n);
+    insertAbove(d, n);
   }, 'Neue Musterfüllung'),
 };
 
@@ -590,34 +811,8 @@ export function patternCanvas(name) {
   return c;
 }
 
-export function drawStarPath(x, cx, cy, n, R, r) {
-  x.beginPath();
-  for (let i = 0; i < n * 2; i++) {
-    const a = (i / (n * 2)) * Math.PI * 2 - Math.PI / 2, rr = i % 2 ? r : R;
-    x.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
-  }
-  x.closePath();
-}
 
-export function drawHeartPath(x, X, Y, W, H) {
-  x.beginPath();
-  x.moveTo(X + W / 2, Y + H * 0.3);
-  x.bezierCurveTo(X + W / 2, Y, X, Y, X, Y + H * 0.3);
-  x.bezierCurveTo(X, Y + H * 0.6, X + W / 2, Y + H * 0.8, X + W / 2, Y + H);
-  x.bezierCurveTo(X + W / 2, Y + H * 0.8, X + W, Y + H * 0.6, X + W, Y + H * 0.3);
-  x.bezierCurveTo(X + W, Y, X + W / 2, Y, X + W / 2, Y + H * 0.3);
-  x.closePath();
-}
 
-export function drawBlossom(x, cx, cy, r, color) {
-  x.save(); x.fillStyle = color; x.translate(cx, cy);
-  for (let i = 0; i < 5; i++) {
-    x.rotate((Math.PI * 2) / 5);
-    x.beginPath(); x.ellipse(0, -r * 0.55, r * 0.38, r * 0.55, 0, 0, Math.PI * 2); x.fill();
-  }
-  x.fillStyle = '#fff3a8'; x.beginPath(); x.arc(0, 0, r * 0.16, 0, 7); x.fill();
-  x.restore();
-}
 
 // ---------------- Auswahl ----------------
 export const SELECT = {
@@ -907,13 +1102,27 @@ export function transformLayer(kind) {
 }
 
 // ---------------- Freies Transformieren ----------------
-export function startTransform() {
+export function startTransform(mesh) {
   const d = doc(); if (!d) return;
+  if (S.transform) { if (mesh) setTransformMode(mesh); return; }
   const l = d.layer;
   if (l.lockAll || l.lockPosition) { toast('Position ist fixiert 🔒'); return; }
+  if (l.type === 'group') { toast('Gruppen: bitte eine Ebene wählen oder die Gruppe in ein Smart-Objekt konvertieren'); return; }
+  if (l.type === 'adjust') { toast('Einstellungsebenen haben keine Pixel zum Transformieren'); return; }
   if (l.isBackground) { L.fromBackground(); }
-  rasterize(l);
   const before = cloneCanvas(l.canvas);
+  // Smart-Objekt: verlustfrei aus der Quelle
+  if (l.type === 'smart' && !d.selection) {
+    const sm = l.smart, t0 = sm.t;
+    S.transform = { layer: l, smart: true, before, base: makeCanvas(d.w, d.h), piece: sm.src, w: sm.src.width, h: sm.src.height,
+      cx: t0.cx, cy: t0.cy, cx0: t0.cx, cy0: t0.cy, sx: t0.sx, sy: t0.sy, rot: t0.rot || 0, skx: t0.skx || 0,
+      mesh: t0.mesh || null, corners: t0.corners ? t0.corners.map((p) => ({ ...p })) : null, grid: t0.grid ? t0.grid.map((r) => r.map((p) => ({ ...p }))) : null };
+    if (S.tool !== 'move') S.tool = 'move';
+    if (mesh) setTransformMode(mesh); else renderTransform();
+    emit(); return;
+  }
+  const vectorShape = l.type === 'shape' && !d.selection && !mesh;
+  if (l.type === 'text' || (l.type === 'shape' && !vectorShape)) { rasterize(l); toast('Ebene wurde für die Transformation gerastert'); }
   let float = cloneCanvas(l.canvas);
   if (d.selection) { const fx = ctx2d(float); fx.globalCompositeOperation = 'destination-in'; fx.drawImage(d.selection, 0, 0); }
   const b = alphaBounds(float);
@@ -922,10 +1131,41 @@ export function startTransform() {
   const base = cloneCanvas(before);
   const bx = ctx2d(base);
   if (d.selection) { bx.globalCompositeOperation = 'destination-out'; bx.drawImage(d.selection, 0, 0); } else bx.clearRect(0, 0, d.w, d.h);
-  S.transform = { layer: l, before, base, piece, w: b.w, h: b.h, cx: b.x + b.w / 2, cy: b.y + b.h / 2, cx0: b.x + b.w / 2, cy0: b.y + b.h / 2, sx: 1, sy: 1, rot: 0, skx: 0, hadSel: !!d.selection, maskBefore: l.mask && !d.selection ? cloneCanvas(l.mask) : null };
+  S.transform = { layer: l, before, base, piece, w: b.w, h: b.h, cx: b.x + b.w / 2, cy: b.y + b.h / 2, cx0: b.x + b.w / 2, cy0: b.y + b.h / 2, sx: 1, sy: 1, rot: 0, skx: 0, hadSel: !!d.selection, maskBefore: l.mask && !d.selection ? cloneCanvas(l.mask) : null, vectorShape, shapeBefore: vectorShape ? { ...l.shape } : null, mesh: null };
   if (S.tool !== 'move') S.tool = 'move';
-  renderTransform();
+  if (mesh) setTransformMode(mesh); else renderTransform();
   emit();
+}
+
+// Ecken der freien Transformation (oben links, oben rechts, unten rechts, unten links)
+export function freeCorners(t) {
+  const cos = Math.cos(t.rot), sin = Math.sin(t.rot), k = Math.tan(t.skx || 0);
+  const map = (lx, ly) => { const sx = lx * t.sx + ly * t.sy * k, sy = ly * t.sy; return { x: t.cx + sx * cos - sy * sin, y: t.cy + sx * sin + sy * cos }; };
+  const hw = t.w / 2, hh = t.h / 2;
+  return [map(-hw, -hh), map(hw, -hh), map(hw, hh), map(-hw, hh)];
+}
+
+export function setTransformMode(mode) {
+  const t = S.transform; if (!t) return;
+  if (mode === 'free') {
+    if (t.mesh) { toast('Zurück zu „Frei“ ist nach dem Verformen nicht möglich – Abbrechen setzt zurück'); return; }
+    return;
+  }
+  if (t.vectorShape) { rasterize(t.layer); t.vectorShape = false; toast('Formebene wurde gerastert'); }
+  if (!t.mesh) t.corners = freeCorners(t);
+  if (mode === 'warp' && (!t.grid || t.mesh !== 'warp')) t.grid = gridFromCorners(t.corners);
+  if (mode !== 'warp' && t.mesh === 'warp') t.corners = [t.grid[0][0], t.grid[0][3], t.grid[3][3], t.grid[3][0]].map((p) => ({ ...p }));
+  t.mesh = mode;
+  renderTransform(); emit();
+}
+
+function drawTransformed(x, t, img) {
+  if (t.mesh) { drawMesh(x, img, meshMapFor(t), t.mesh === 'warp' ? 24 : 16); return; }
+  x.save();
+  x.translate(t.cx, t.cy); x.rotate(t.rot); x.transform(1, 0, Math.tan(t.skx || 0), 1, 0, 0); x.scale(t.sx, t.sy);
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(img, -t.w / 2, -t.h / 2);
+  x.restore();
 }
 
 export function renderTransform() {
@@ -934,11 +1174,9 @@ export function renderTransform() {
   x.save(); x.setTransform(1, 0, 0, 1, 0, 0);
   x.clearRect(0, 0, t.layer.canvas.width, t.layer.canvas.height);
   x.drawImage(t.base, 0, 0);
-  x.translate(t.cx, t.cy); x.rotate(t.rot); x.transform(1, 0, Math.tan(t.skx || 0), 1, 0, 0); x.scale(t.sx, t.sy);
-  x.imageSmoothingQuality = 'high';
-  x.drawImage(t.piece, -t.w / 2, -t.h / 2);
   x.restore();
-  if (t.maskBefore && t.layer.mask) {
+  drawTransformed(x, t, t.piece);
+  if (t.maskBefore && t.layer.mask && !t.mesh) {
     const mx = ctx2d(t.layer.mask);
     mx.save(); mx.setTransform(1, 0, 0, 1, 0, 0); mx.clearRect(0, 0, t.layer.mask.width, t.layer.mask.height);
     mx.translate(t.cx, t.cy); mx.rotate(t.rot); mx.transform(1, 0, Math.tan(t.skx || 0), 1, 0, 0); mx.scale(t.sx, t.sy); mx.translate(-t.cx0, -t.cy0);
@@ -951,16 +1189,30 @@ export function renderTransform() {
 export function applyTransform() {
   const t = S.transform; if (!t) return;
   const d = doc();
+  const l = t.layer;
+  if (t.smart) {
+    l.smart = { ...l.smart, t: { cx: t.cx, cy: t.cy, sx: t.sx, sy: t.sy, rot: t.rot, skx: t.skx, mesh: t.mesh, corners: t.corners, grid: t.grid } };
+    S.transform = null;
+    renderSmartLayer(l, d.w, d.h);
+    commit('Smart-Objekt transformieren');
+    return;
+  }
+  if (t.vectorShape && l.shape) {
+    const s0 = t.shapeBefore;
+    const cx0 = s0.x + s0.w / 2, cy0 = s0.y + s0.h / 2;
+    const ncx = cx0 + (t.cx - t.cx0), ncy = cy0 + (t.cy - t.cy0);
+    const nw = s0.w * t.sx, nh = s0.h * t.sy;
+    l.shape = { ...s0, x: ncx - nw / 2, y: ncy - nh / 2, w: nw, h: nh, rot: (s0.rot || 0) + t.rot };
+    if (t.skx) { rasterize(l); }
+    else { renderShapeLayer(l, d.w, d.h); }
+  }
   if (t.hadSel && d) {
-    const s = makeCanvas(d.w, d.h); const x = ctx2d(s);
-    x.translate(t.cx, t.cy); x.rotate(t.rot); x.scale(t.sx, t.sy);
-    x.fillStyle = '#fff'; x.fillRect(-t.w / 2, -t.h / 2, t.w, t.h);
     const pm = cloneCanvas(t.piece); const px = ctx2d(pm); px.globalCompositeOperation = 'source-in'; px.fillStyle = '#fff'; px.fillRect(0, 0, t.w, t.h);
-    const s2 = makeCanvas(d.w, d.h); const x2 = ctx2d(s2); x2.translate(t.cx, t.cy); x2.rotate(t.rot); x2.scale(t.sx, t.sy); x2.drawImage(pm, -t.w / 2, -t.h / 2);
+    const s2 = makeCanvas(d.w, d.h); drawTransformed(ctx2d(s2), t, pm);
     d.setSelection(s2);
   }
   S.transform = null;
-  commit('Frei transformieren');
+  commit(t.mesh ? { warp: 'Verformen', perspective: 'Perspektivisch verzerren', distort: 'Verzerren' }[t.mesh] : 'Frei transformieren');
 }
 
 export function cancelTransform() {
@@ -1090,4 +1342,4 @@ export function saveSwatches() { LS.set('swatches', S.swatches); LS.set('gradien
 
 export function maskColorIsReveal() { return luminance(S.fg) >= 0.5; }
 
-export { SEL, flattenToCanvas, composite, renderTextLayer, Layer };
+export { SEL, flattenToCanvas, composite, renderTextLayer, Layer, renderShapeLayer };

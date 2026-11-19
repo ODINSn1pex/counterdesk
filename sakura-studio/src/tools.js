@@ -1,11 +1,13 @@
 // Werkzeuge: Zeigerereignisse in Dokumentkoordinaten
 import {
   S, doc, emit, view, commit, toast, canEditPixels, rasterize, setFg, setBg, gradientStops, patternCanvas,
-  startTransform, renderTransform, applyTransform, applyCrop, finishTextEdit, drawStarPath, drawHeartPath, drawBlossom,
-  VIEW, Layer, renderTextLayer, composite, SEL, L, maskColorIsReveal,
+  startTransform, renderTransform, applyTransform, applyCrop, finishTextEdit, drawStarPath, drawBlossom,
+  VIEW, Layer, renderTextLayer, composite, SEL, L, maskColorIsReveal, renderSmartLayer,
 } from './state.js';
 import { makeCanvas, ctx2d, cloneCanvas, clamp, dist, hexToRgb, rgbToHex, alphaBounds, rgbToHsl, hslToRgb } from './engine/util.js';
-import { gcoFor, textBounds, getMerged } from './engine/doc.js';
+import { gcoFor, textBounds, getMerged, descendants } from './engine/doc.js';
+import { shapePath, drawLine, renderShapeLayer } from './engine/shapes.js';
+export { shapePath };
 
 let T = null; // aktueller Zeiger-Vorgang
 const SPACE = { held: false };
@@ -371,46 +373,7 @@ export function drawGradient(x, w, h, a, b, opts) {
 }
 
 // ---------- Formen ----------
-export function shapePath(x, kind, r, o) {
-  const { x: X, y: Y, w: W, h: H } = r;
-  x.beginPath();
-  if (kind === 'rect') x.rect(X, Y, W, H);
-  else if (kind === 'rounded') x.roundRect(X, Y, W, H, Math.min(o.radius, Math.abs(W) / 2, Math.abs(H) / 2));
-  else if (kind === 'ellipse') x.ellipse(X + W / 2, Y + H / 2, Math.abs(W / 2), Math.abs(H / 2), 0, 0, Math.PI * 2);
-  else if (kind === 'triangle') { x.moveTo(X + W / 2, Y); x.lineTo(X + W, Y + H); x.lineTo(X, Y + H); x.closePath(); }
-  else if (kind === 'polygon') {
-    for (let i = 0; i < o.sides; i++) { const a = (i / o.sides) * Math.PI * 2 - Math.PI / 2; x.lineTo(X + W / 2 + Math.cos(a) * W / 2, Y + H / 2 + Math.sin(a) * H / 2); }
-    x.closePath();
-  } else if (kind === 'star') {
-    for (let i = 0; i < o.sides * 2; i++) { const a = (i / (o.sides * 2)) * Math.PI * 2 - Math.PI / 2, k = i % 2 ? o.starInner : 1; x.lineTo(X + W / 2 + Math.cos(a) * W / 2 * k, Y + H / 2 + Math.sin(a) * H / 2 * k); }
-    x.closePath();
-  } else if (kind === 'heart') { drawHeartPath(x, X, Y, W, H); }
-  else if (kind === 'blossom') {
-    const cx = X + W / 2, cy = Y + H / 2, rr = Math.min(Math.abs(W), Math.abs(H)) / 2;
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
-      x.moveTo(cx, cy);
-      x.ellipse(cx + Math.cos(a) * rr * 0.5, cy + Math.sin(a) * rr * 0.5, rr * 0.5, rr * 0.32, a, 0, Math.PI * 2);
-    }
-  } else if (kind === 'arrow') {
-    const hw = H * 0.5;
-    x.moveTo(X, Y + H * 0.3); x.lineTo(X + W * 0.6, Y + H * 0.3); x.lineTo(X + W * 0.6, Y); x.lineTo(X + W, Y + hw); x.lineTo(X + W * 0.6, Y + H); x.lineTo(X + W * 0.6, Y + H * 0.7); x.lineTo(X, Y + H * 0.7); x.closePath();
-  } else if (kind === 'speech') {
-    x.roundRect(X, Y, W, H * 0.78, Math.min(Math.abs(W), Math.abs(H)) * 0.15);
-    x.moveTo(X + W * 0.2, Y + H * 0.75); x.lineTo(X + W * 0.15, Y + H); x.lineTo(X + W * 0.4, Y + H * 0.75);
-  }
-}
 
-function drawLine(x, a, b, o, color) {
-  x.save(); x.strokeStyle = color; x.fillStyle = color; x.lineWidth = o.lineWidth; x.lineCap = 'round';
-  x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(b.x, b.y); x.stroke();
-  if (o.arrow) {
-    const ang = Math.atan2(b.y - a.y, b.x - a.x), s = o.lineWidth * 4;
-    x.beginPath(); x.moveTo(b.x, b.y); x.lineTo(b.x - Math.cos(ang - 0.45) * s, b.y - Math.sin(ang - 0.45) * s);
-    x.lineTo(b.x - Math.cos(ang + 0.45) * s, b.y - Math.sin(ang + 0.45) * s); x.closePath(); x.fill();
-  }
-  x.restore();
-}
 
 function rectFrom(a, b, e, ratio) {
   let w = b.x - a.x, h = b.y - a.y;
@@ -610,6 +573,19 @@ export function pointerMove(e) {
   switch (T.kind) {
     case 'pan': d.panX = T.px + (e.sx - T.sx); d.panY = T.py + (e.sy - T.sy); view.request(); break;
     case 'move': moveDrag(d, e); break;
+    case 'move-multi': {
+      let dx = Math.round(e.p.x - T.a.x), dy = Math.round(e.p.y - T.a.y);
+      if (e.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
+      T.dx = dx; T.dy = dy;
+      for (const it of T.items) {
+        const x = it.layer;
+        if (it.before) { const c = ctx2d(x.canvas); c.clearRect(0, 0, d.w, d.h); c.drawImage(it.before, dx, dy); }
+        if (it.mask) { const m = ctx2d(x.mask); m.clearRect(0, 0, d.w, d.h); m.drawImage(it.mask, dx, dy); }
+        x.touch();
+      }
+      view.request();
+      break;
+    }
     case 'transform': transformDrag(e); break;
     case 'marquee': T.b = p; T.e = e; view.overlay(); break;
     case 'lasso': T.pts.push(p); view.overlay(); break;
@@ -667,6 +643,17 @@ export function pointerUp(e) {
   switch (t.kind) {
     case 'pan': emit(); break;
     case 'move': moveUp(d, t); break;
+    case 'move-multi': {
+      if (!t.dx && !t.dy) break;
+      for (const it of t.items) {
+        const x = it.layer;
+        if (x.type === 'smart') { x.smart = { ...x.smart, t: shiftT(x.smart.t, t.dx, t.dy) }; renderSmartLayer(x, d.w, d.h); }
+        else if (x.type === 'shape') { x.shape = { ...x.shape, x: x.shape.x + t.dx, y: x.shape.y + t.dy }; renderShapeLayer(x, d.w, d.h); }
+        else if (x.type === 'text') { x.text.x += t.dx; x.text.y += t.dy; renderTextLayer(x, d.w, d.h); }
+      }
+      commit('Verschieben');
+      break;
+    }
     case 'transform': emit(); break;
     case 'marquee': {
       const r = norm(rectFrom(t.a, t.b, t.e || e, S.sel.ratio === 'free' ? null : Number(S.sel.ratio)));
@@ -796,6 +783,17 @@ function finishShape(d, t, e) {
   const sub = S.sub.shape, o = S.shape;
   if (dist(t.a, t.b) < 2) return;
   const l = new Layer(d.w, d.h, ({ rect: 'Rechteck', rounded: 'Abgerundetes Rechteck', ellipse: 'Ellipse', triangle: 'Dreieck', polygon: 'Polygon', line: 'Linie', star: 'Stern', heart: 'Herz', blossom: 'Kirschblüte', arrow: 'Pfeil', speech: 'Sprechblase' })[sub] + ' ' + (d.layers.length));
+  if (o.mode !== 'pixel') {
+    // Vektor-Formebene (bleibt bearbeitbar)
+    const b = sub === 'line' ? e.shift ? snapAngle(t.a, t.b) : t.b : null;
+    const r = sub === 'line' ? { x: t.a.x, y: t.a.y, w: b.x - t.a.x, h: b.y - t.a.y } : rectFrom(t.a, t.b, t.e || e);
+    l.type = 'shape';
+    l.shape = { kind: sub, x: r.x, y: r.y, w: r.w, h: r.h, rot: 0, fillOn: o.fill, fillColor: S.fg, strokeOn: o.stroke, strokeColor: o.strokeColor, strokeWidth: o.strokeWidth, radius: o.radius, sides: o.sides, starInner: o.starInner, lineWidth: o.lineWidth, arrow: o.arrow };
+    renderShapeLayer(l, d.w, d.h);
+    d.addLayer(l);
+    commit('Formebene');
+    return;
+  }
   const x = l.ctx;
   if (sub === 'line') drawLine(x, t.a, e.shift ? snapAngle(t.a, t.b) : t.b, o, S.fg);
   else {
@@ -826,7 +824,7 @@ function moveDown(d, e) {
   let l = d.layer;
   if (S.move.autoSelect || e.ctrl) {
     for (let i = d.layers.length - 1; i >= 0; i--) {
-      const L2 = d.layers[i]; if (!L2.visible) continue;
+      const L2 = d.layers[i]; if (!L2.visible || !L2.hasPixels) continue;
       const px = ctx2d(L2.canvas).getImageData(clamp(Math.floor(e.p.x), 0, d.w - 1), clamp(Math.floor(e.p.y), 0, d.h - 1), 1, 1).data;
       if (px[3] > 10) { d.active = i; l = L2; emit(); break; }
     }
@@ -834,6 +832,15 @@ function moveDown(d, e) {
   if (l.lockAll || l.lockPosition) { toast('Position ist fixiert 🔒'); return; }
   if (l.type === 'text' && !d.selection) {
     T = { kind: 'text-move', layer: l, a: e.p, tx: l.text.x, ty: l.text.y };
+    return;
+  }
+  // Gruppen, Formen, Smart-Objekte, Einstellungsebenen: alle betroffenen Ebenen gemeinsam verschieben
+  if (l.type === 'group' || l.type === 'shape' || l.type === 'smart' || l.type === 'adjust') {
+    const targets = l.type === 'group' ? descendants(d.layers, l).filter((x) => x.type !== 'group') : [l];
+    if (l.type === 'group' && l.mask) targets.push(l);
+    const locked = targets.find((x) => x.lockAll || x.lockPosition);
+    if (locked) { toast(`„${locked.name}“ ist fixiert 🔒`); return; }
+    T = { kind: 'move-multi', a: e.p, dx: 0, dy: 0, items: targets.map((x) => ({ layer: x, before: x.hasPixels ? cloneCanvas(x.canvas) : null, mask: x.mask ? cloneCanvas(x.mask) : null })) };
     return;
   }
   const before = cloneCanvas(l.canvas);
@@ -883,6 +890,7 @@ export function nudge(dx, dy) {
   T = null;
   moveDown(d, { p: { x: 0, y: 0 } });
   if (!T) return;
+  if (T.kind === 'move-multi') { pointerMove({ p: { x: dx, y: dy } }); pointerUp({ p: { x: dx, y: dy } }); return; }
   moveDrag(d, { p: { x: dx, y: dy }, noSnap: true });
   T = null;
   commit('Verschieben');
@@ -912,8 +920,27 @@ export function transformHandles(t) {
   return pts;
 }
 
+function shiftT(t, dx, dy) {
+  const n = { ...t, cx: t.cx + dx, cy: t.cy + dy };
+  if (t.corners) n.corners = t.corners.map((q) => ({ x: q.x + dx, y: q.y + dy }));
+  if (t.grid) n.grid = t.grid.map((r) => r.map((q) => ({ x: q.x + dx, y: q.y + dy })));
+  return n;
+}
+
+export function meshPoints(t) {
+  if (!t || !t.mesh) return [];
+  if (t.mesh === 'warp') { const out = []; t.grid.forEach((r, j) => r.forEach((q, i) => out.push({ ...q, j, i }))); return out; }
+  return t.corners.map((q, i) => ({ ...q, ci: i }));
+}
+
 function transformDown(e) {
   const t = S.transform; const p = e.p;
+  if (t.mesh) {
+    const tol = 9 / e.zoom;
+    const hit = meshPoints(t).find((q) => dist(q, p) < tol);
+    T = { kind: 'transform', mode: hit ? 'meshpt' : 'meshmove', hit, a: p, start: JSON.parse(JSON.stringify({ corners: t.corners, grid: t.grid })) };
+    return;
+  }
   const hs = transformHandles(t);
   const tol = 8 / e.zoom;
   const h = hs.find((q) => dist(q, p) < tol);
@@ -927,6 +954,31 @@ function transformDown(e) {
 
 function transformDrag(e) {
   const t = S.transform; const s = T.start; const p = e.p;
+  if (T.mode === 'meshpt' || T.mode === 'meshmove') {
+    const dx = p.x - T.a.x, dy = p.y - T.a.y;
+    if (T.mode === 'meshmove') {
+      if (t.corners && s.corners) t.corners = s.corners.map((q) => ({ x: q.x + dx, y: q.y + dy }));
+      if (t.grid && s.grid) t.grid = s.grid.map((r) => r.map((q) => ({ x: q.x + dx, y: q.y + dy })));
+    } else if (t.mesh === 'warp') {
+      const { i, j } = T.hit;
+      t.grid[j][i] = { x: s.grid[j][i].x + dx, y: s.grid[j][i].y + dy };
+      // Eckpunkte ziehen ihre Griffe mit (wie in Photoshop)
+      if ((i === 0 || i === 3) && (j === 0 || j === 3)) {
+        const ni = i === 0 ? 1 : 2, nj = j === 0 ? 1 : 2;
+        for (const [jj, ii] of [[j, ni], [nj, i], [nj, ni]]) t.grid[jj][ii] = { x: s.grid[jj][ii].x + dx, y: s.grid[jj][ii].y + dy };
+      }
+    } else {
+      const ci = T.hit.ci;
+      t.corners[ci] = { x: s.corners[ci].x + dx, y: s.corners[ci].y + dy };
+      if (t.mesh === 'perspective' && e.shift) {
+        // Umschalt: gegenüberliegende Ecke symmetrisch bewegen
+        const mirror = { 0: 1, 1: 0, 2: 3, 3: 2 }[ci];
+        t.corners[mirror] = { x: s.corners[mirror].x - dx, y: s.corners[mirror].y + dy };
+      }
+    }
+    renderTransform(); emit();
+    return;
+  }
   if (T.mode === 'move') { t.cx = s.cx + p.x - T.a.x; t.cy = s.cy + p.y - T.a.y; }
   else if (T.mode === 'rotate') {
     let a = s.rot + Math.atan2(p.y - s.cy, p.x - s.cx) - Math.atan2(T.a.y - s.cy, T.a.x - s.cx);

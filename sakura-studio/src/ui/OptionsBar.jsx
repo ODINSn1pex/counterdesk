@@ -126,7 +126,20 @@ export function OptionsBar() {
     if (S.transform) {
       const tr = S.transform;
       const upd = (k, f) => (v) => { tr[k] = f ? f(v) : v; renderTransform(); emit(); };
-      body = <>
+      const modes = <div className="seg" title="Transformationsmodus">
+        {[['free', 'Frei'], ['distort', 'Verzerren'], ['perspective', 'Perspektive'], ['warp', 'Verformen']].map(([k, n]) => (
+          <button key={k} className={(tr.mesh || 'free') === k ? 'on' : ''} onClick={() => import('../state.js').then((m) => m.setTransformMode(k))}>{n}</button>
+        ))}
+      </div>;
+      if (tr.mesh) body = <>
+        {modes}
+        <span className="hint">{tr.mesh === 'warp' ? 'Gitterpunkte & Griffe ziehen · in die Fläche klicken = verschieben' : tr.mesh === 'perspective' ? 'Ecken ziehen · Umschalt = symmetrisch' : 'Ecken frei ziehen'}</span>
+        <div className="opt-sep" />
+        <button className="btn" onClick={cancelTransform} title="Abbrechen (Esc)">⊘</button>
+        <button className="btn primary" onClick={applyTransform} title="Bestätigen (Enter)"><Icon name="check" size={14} /></button>
+      </>;
+      else body = <>
+        {modes}
         <Num label="X:" value={Math.round(tr.cx)} min={-99999} max={99999} onChange={upd('cx')} unit=" Px" width={64} />
         <Num label="Y:" value={Math.round(tr.cy)} min={-99999} max={99999} onChange={upd('cy')} unit=" Px" width={64} />
         <Num label="B:" value={Math.round(tr.sx * 1000) / 10} min={-10000} max={10000} step={0.1} onChange={upd('sx', (v) => v / 100)} unit="%" width={60} />
@@ -273,7 +286,10 @@ export function OptionsBar() {
     </>;
   } else if (t === 'shape') {
     const o = S.shape;
+    const sl = d && d.layer && d.layer.type === 'shape' ? d.layer : null;
     body = <>
+      <Sel value={o.mode} onChange={(v) => { o.mode = v; emit(); }} options={[['shape', 'Form (Vektor)'], ['pixel', 'Pixel']]} width={130} />
+      {sl && <span className="hint">„{sl.name}“ bearbeiten: Eigenschaften-Bedienfeld</span>}
       {sub === 'line' ? <Num label="Stärke:" value={o.lineWidth} min={1} max={500} onChange={set(o, 'lineWidth')} unit=" Px" /> : <>
         <Check label="Fläche" value={o.fill} onChange={set(o, 'fill')} /><span className="swatch-inline" style={{ background: S.fg }} title="Vordergrundfarbe" />
         <Check label="Kontur" value={o.stroke} onChange={set(o, 'stroke')} />

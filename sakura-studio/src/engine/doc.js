@@ -1,5 +1,6 @@
 // Dokument-, Ebenen- und Protokollmodell
 import { makeCanvas, ctx2d, cloneCanvas, nextId, hexToRgb } from './util.js';
+import { ADJUSTMENTS } from './filters.js';
 
 let revCounter = 1;
 export const newRev = () => revCounter++;
@@ -40,9 +41,16 @@ export class Layer {
     this.type = 'raster';
     this.text = null;
     this.fx = {};
+    this.parent = null;     // ID der übergeordneten Gruppe
+    this.collapsed = false; // Gruppe eingeklappt
+    this.adjust = null;     // Einstellungsebene: { id, params }
+    this.shape = null;      // Vektor-Formebene
+    this.smart = null;      // Smart-Objekt: { src, m:[a,b,c,d,e,f], filters:[] }
     this.rev = newRev();
     this.thumbRev = -1;
   }
+  get isGroup() { return this.type === 'group'; }
+  get hasPixels() { return this.type !== 'group' && this.type !== 'adjust'; }
   get ctx() { return ctx2d(this.canvas); }
   touch() { this.rev = newRev(); }
 }
@@ -75,9 +83,12 @@ export class Doc {
   get layer() { return this.layers[this.active]; }
 
   addLayer(layer, index) {
+    const ref = this.layers[this.active];
+    if (index == null && ref && layer.parent == null) layer.parent = ref.parent || null;
     const i = index == null ? this.active + 1 : index;
     this.layers.splice(i, 0, layer);
-    this.active = i;
+    this.layers = normalizeTree(this.layers);
+    this.active = this.layers.indexOf(layer);
     return layer;
   }
 
@@ -167,12 +178,21 @@ export class Doc {
   redo() { if (this.histIdx < this.history.length - 1) this.restore(this.histIdx + 1); }
 }
 
+// Quelle wird nie verändert → Referenz genügt; Transformation & Filter werden kopiert
+export function cloneSmart(sm) {
+  return { src: sm.src, name: sm.name, t: JSON.parse(JSON.stringify(sm.t || {})), filters: JSON.parse(JSON.stringify(sm.filters || [])) };
+}
+
 export function layerProps(l) {
   return {
     name: l.name, visible: l.visible, opacity: l.opacity, fill: l.fill, blend: l.blend,
     lockPixels: l.lockPixels, lockPosition: l.lockPosition, lockAlpha: l.lockAlpha, lockAll: l.lockAll,
     isBackground: l.isBackground, maskEnabled: l.maskEnabled, editMask: l.editMask, clip: l.clip,
     type: l.type, text: l.text ? { ...l.text } : null, fx: JSON.parse(JSON.stringify(l.fx || {})),
+    parent: l.parent || null, collapsed: !!l.collapsed,
+    adjust: l.adjust ? JSON.parse(JSON.stringify(l.adjust)) : null,
+    shape: l.shape ? { ...l.shape } : null,
+    smart: l.smart ? cloneSmart(l.smart) : null,
   };
 }
 
@@ -180,6 +200,39 @@ export function applyLayerProps(l, p) {
   Object.assign(l, p);
   l.text = p.text ? { ...p.text } : null;
   l.fx = JSON.parse(JSON.stringify(p.fx || {}));
+  l.adjust = p.adjust ? JSON.parse(JSON.stringify(p.adjust)) : null;
+  l.shape = p.shape ? { ...p.shape } : null;
+  l.smart = p.smart ? cloneSmart(p.smart) : null;
+  l.parent = p.parent || null;
+}
+
+// ---------- Ebenenbaum (flache Liste mit parent-Verweisen) ----------
+export function childrenOf(layers, parentId) { return layers.filter((l) => (l.parent || null) === (parentId || null)); }
+export function descendants(layers, g) {
+  const out = [];
+  const walk = (id) => layers.forEach((l) => { if (l.parent === id) { out.push(l); if (l.type === 'group') walk(l.id); } });
+  walk(g.id);
+  return out;
+}
+export function ancestors(layers, l) {
+  const out = []; let p = l.parent;
+  while (p) { const g = layers.find((x) => x.id === p); if (!g) break; out.push(g); p = g.parent; }
+  return out;
+}
+export function effectiveVisible(layers, l) { return l.visible && ancestors(layers, l).every((g) => g.visible); }
+// Bringt die Liste in Baum-Reihenfolge: Kinder direkt unter ihrer Gruppe (Gruppe oben)
+export function normalizeTree(layers) {
+  const ids = new Set(layers.map((l) => l.id));
+  layers.forEach((l) => { if (l.parent && !ids.has(l.parent)) l.parent = null; });
+  const out = [];
+  const emit = (parentId) => {
+    layers.filter((l) => (l.parent || null) === parentId).forEach((l) => {
+      if (l.type === 'group') emit(l.id);
+      out.push(l);
+    });
+  };
+  emit(null);
+  return out;
 }
 
 // ---------- Text-Ebenen ----------
@@ -374,29 +427,96 @@ function renderLayerFx(layer, w, h, key) {
 // Signatur einer Ebenenliste (Inhalt + Eigenschaften) für Caches
 export function layerSig(layers) {
   let out = '';
-  for (const l of layers) out += l.id + ':' + l.rev + ':' + (l.visible ? 1 : 0) + ':' + l.opacity + ':' + l.blend + ':' + l.fill + ':' + (l.clip ? 1 : 0) + ':' + (l.maskEnabled ? 1 : 0) + ':' + (l.mask ? 1 : 0) + ':' + JSON.stringify(l.fx || {}) + '|';
+  for (const l of layers) out += l.id + ':' + l.rev + ':' + (l.visible ? 1 : 0) + ':' + l.opacity + ':' + l.blend + ':' + l.fill + ':' + (l.clip ? 1 : 0) + ':' + (l.maskEnabled ? 1 : 0) + ':' + (l.mask ? 1 : 0) + ':' + JSON.stringify(l.fx || {}) + ':' + (l.parent || '') + (l.adjust ? JSON.stringify(l.adjust) : '') + '|';
   return out;
 }
 
-function drawLayers(layers, x, w, h, opts = {}) {
+// Einstellungsebene auf den bisher gezeichneten Inhalt anwenden (Ergebnis zwischengespeichert)
+const adjCache = new Map();
+function applyAdjustLayer(layer, x, w, h, key) {
+  const def = ADJUSTMENTS[layer.adjust && layer.adjust.id];
+  if (!def) return;
+  const ck = key + '#' + w + 'x' + h + '#' + JSON.stringify(layer.adjust.params);
+  let e = adjCache.get(layer.id);
+  if (!e || e.key !== ck) {
+    const src = makeCanvas(w, h); ctx2d(src).drawImage(x.canvas, 0, 0);
+    e = { key: ck, canvas: def.apply(src, layer.adjust.params || {}) };
+    adjCache.set(layer.id, e);
+    if (adjCache.size > 64) adjCache.delete(adjCache.keys().next().value);
+  }
+  let res = e.canvas;
+  if (layer.mask && layer.maskEnabled) {
+    const t = tmp('adjm', w, h); const tx = ctx2d(t);
+    tx.drawImage(res, 0, 0); tx.globalCompositeOperation = 'destination-in'; tx.drawImage(layer.mask, 0, 0);
+    res = t;
+  }
+  x.save();
+  x.globalAlpha = layer.opacity * layer.fill;
+  x.globalCompositeOperation = layer.blend === 'normal' || layer.blend === 'pass' ? 'source-atop' : gcoFor(layer.blend);
+  x.drawImage(res, 0, 0);
+  x.restore();
+}
+
+const grpPool = [];
+function grpCanvas(depth, w, h) {
+  let c = grpPool[depth];
+  if (!c) c = grpPool[depth] = makeCanvas(w, h);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const x = ctx2d(c); x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over'; x.clearRect(0, 0, w, h);
+  return c;
+}
+
+function subtreeSig(all, l) { return layerSig([l]) + (l.type === 'group' ? layerSig(descendants(all, l)) : ''); }
+
+// Zeichnet eine Geschwisterliste (inkl. Gruppen rekursiv) in den Kontext x
+function drawNodes(all, nodes, x, w, h, opts, depth, key) {
   let base = null; // Basis für Schnittmasken
-  layers.forEach((layer, i) => {
-    if (!layer.visible && !opts.forceAll) { if (!layer.clip) base = null; return; }
-    let src = renderLayerFx(layer, w, h, 'L' + (i % 2));
-    if (layer.clip && base) {
-      const c = tmp('clip', w, h);
+  let acc = key;
+  nodes.forEach((node, i) => {
+    if (!node.visible && !opts.forceAll) { if (!node.clip) base = null; return; }
+    if (node.type === 'adjust') {
+      applyAdjustLayer(node, x, w, h, acc);
+      acc += layerSig([node]);
+      return;
+    }
+    let src;
+    if (node.type === 'group') {
+      const kids = childrenOf(all, node.id);
+      const passThrough = (node.blend === 'pass' || node.blend === 'normal') && node.opacity >= 1 && node.fill >= 1 && !(node.mask && node.maskEnabled) && !node.clip && node.blend === 'pass';
+      if (passThrough) {
+        drawNodes(all, kids, x, w, h, opts, depth + 1, acc);
+        acc += subtreeSig(all, node);
+        base = null;
+        return;
+      }
+      const g = grpCanvas(depth, w, h);
+      drawNodes(all, kids, ctx2d(g), w, h, opts, depth + 1, 'g' + node.id + '#' + subtreeSig(all, node));
+      if (node.mask && node.maskEnabled) { const gx = ctx2d(g); gx.globalCompositeOperation = 'destination-in'; gx.drawImage(node.mask, 0, 0); gx.globalCompositeOperation = 'source-over'; }
+      src = g;
+    } else {
+      src = renderLayerFx(node, w, h, 'L' + (i % 2) + '_' + depth);
+    }
+    if (node.clip && base) {
+      const c = tmp('clip' + depth, w, h);
       const cx = ctx2d(c);
       cx.drawImage(src, 0, 0);
       cx.globalCompositeOperation = 'destination-in';
       cx.drawImage(base, 0, 0);
       src = c;
-    } else if (!layer.clip) {
-      base = layer.canvas;
+    } else if (!node.clip) {
+      base = node.type === 'group' ? src : node.canvas;
     }
-    x.globalAlpha = layer.opacity;
-    x.globalCompositeOperation = gcoFor(layer.blend);
+    x.globalAlpha = node.opacity * (node.type === 'group' ? node.fill : 1);
+    x.globalCompositeOperation = gcoFor(node.blend === 'pass' ? 'normal' : node.blend);
     x.drawImage(src, 0, 0);
+    x.globalAlpha = 1;
+    x.globalCompositeOperation = 'source-over';
+    acc += subtreeSig(all, node);
   });
+}
+
+function drawLayers(layers, x, w, h, opts = {}, key = 'flat') {
+  drawNodes(layers, layers.filter((l) => !l.parent), x, w, h, opts, 0, key);
   x.globalAlpha = 1;
   x.globalCompositeOperation = 'source-over';
 }
@@ -417,16 +537,17 @@ export function composite(doc, target, opts = {}) {
   x.setTransform(1, 0, 0, 1, 0, 0);
   const L = doc.layers;
   const a = doc.active;
-  const canCache = opts.cached && !L.some((l) => l.clip) && a >= 0 && a < L.length;
+  const tree = L.some((l) => l.type === 'group' || l.parent);
+  const canCache = opts.cached && !tree && !L.some((l) => l.clip) && a >= 0 && a < L.length;
   // Nur Ausschnitt neu zusammensetzen, wenn sich ausschließlich die aktive Ebene geändert hat
   if (canCache && opts.rect) {
     const cache = cacheFor(doc);
     const below = L.slice(0, a), above = L.slice(a + 1);
     const okBelow = !below.length || (cache.below && cache.belowSig === w + 'x' + h + '#' + layerSig(below));
-    const simpleAbove = above.every((l) => !l.visible || l.blend === 'normal');
-    const okAbove = !above.length || !simpleAbove || (cache.above && cache.aboveSig === w + 'x' + h + '#' + layerSig(above));
+    const simpleAbove = above.every((l) => !l.visible || (l.blend === 'normal' && l.type !== 'adjust'));
+    const okAbove = !above.length || (simpleAbove && cache.above && cache.aboveSig === w + 'x' + h + '#' + layerSig(above));
     const act = L[a];
-    const plainActive = !(act.mask && act.maskEnabled) && act.fill >= 1 && act.blend !== 'dissolve' && !Object.values(act.fx || {}).some((f) => f && f.enabled);
+    const plainActive = act.type !== 'adjust' && !(act.mask && act.maskEnabled) && act.fill >= 1 && act.blend !== 'dissolve' && !Object.values(act.fx || {}).some((f) => f && f.enabled);
     if (okBelow && okAbove && plainActive) {
       const r = opts.rect;
       const rx = Math.max(0, Math.floor(r.x)), ry = Math.max(0, Math.floor(r.y));
@@ -440,10 +561,7 @@ export function composite(doc, target, opts = {}) {
           x.drawImage(act.canvas, rx, ry, rw, rh, rx, ry, rw, rh);
           x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
         }
-        if (above.length) {
-          if (simpleAbove) x.drawImage(cache.above, rx, ry, rw, rh, rx, ry, rw, rh);
-          else drawLayers(above, x, w, h);
-        }
+        if (above.length) x.drawImage(cache.above, rx, ry, rw, rh, rx, ry, rw, rh);
       }
       x.restore();
       return;
@@ -466,9 +584,9 @@ export function composite(doc, target, opts = {}) {
       }
       x.drawImage(cache.below, 0, 0);
     }
-    drawLayers([L[a]], x, w, h);
+    drawLayers([L[a]], x, w, h, {}, 'b#' + layerSig(below));
     if (above.length) {
-      const simple = above.every((l) => !l.visible || l.blend === 'normal');
+      const simple = above.every((l) => !l.visible || (l.blend === 'normal' && l.type !== 'adjust'));
       if (simple) {
         const sig = w + 'x' + h + '#' + layerSig(above);
         if (sig !== cache.aboveSig || !cache.above) {
@@ -479,7 +597,7 @@ export function composite(doc, target, opts = {}) {
           cache.aboveSig = sig;
         }
         x.drawImage(cache.above, 0, 0);
-      } else drawLayers(above, x, w, h);
+      } else drawLayers(above, x, w, h, {}, 'ba#' + layerSig(L.slice(0, a + 1)));
     }
   }
   x.restore();

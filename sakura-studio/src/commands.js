@@ -6,6 +6,7 @@ import {
 } from './state.js';
 import { ADJUSTMENTS, FILTERS } from './engine/filters.js';
 import { PATHS, alignLayer, nudge, cancelOp, finishPoly, finishPath } from './tools.js';
+import { ADJ_LAYER_TYPES } from './state.js';
 
 const hasDoc = () => !!doc();
 const hasSel = () => !!(doc() && doc().selection);
@@ -74,6 +75,10 @@ export const MENUS = [
       '-',
       { label: 'Frei transformieren', key: 'Strg+T', run: startTransform, enabled: hasDoc },
       { label: 'Transformieren', sub: [
+        { label: 'Verzerren', run: () => startTransform('distort'), enabled: hasDoc },
+        { label: 'Perspektivisch', run: () => startTransform('perspective'), enabled: hasDoc },
+        { label: 'Verformen', run: () => startTransform('warp'), enabled: hasDoc },
+        '-',
         { label: '180° drehen', run: () => transformLayer('r180'), enabled: hasDoc },
         { label: '90° im UZS drehen', run: () => transformLayer('r90'), enabled: hasDoc },
         { label: '90° gegen UZS drehen', run: () => transformLayer('r-90'), enabled: hasDoc },
@@ -133,6 +138,7 @@ export const MENUS = [
     id: 'layer', label: 'Ebene', items: [
       { label: 'Neu', sub: [
         { label: 'Ebene…', key: 'Umschalt+Strg+N', run: L.add, enabled: hasDoc },
+        { label: 'Gruppe', run: L.newGroup, enabled: hasDoc },
         { label: 'Ebene aus Hintergrund', run: L.fromBackground, enabled: () => doc() && doc().layer.isBackground },
         '-',
         { label: 'Ebene durch Kopie', key: 'Strg+J', run: () => L.viaCopy(false), enabled: hasDoc },
@@ -153,6 +159,7 @@ export const MENUS = [
         '-',
         { label: 'Ebenenstil löschen', run: () => { const d = doc(); d.layer.fx = {}; d.layer.touch(); view.request(); import('./state.js').then((m) => m.commit('Ebenenstil löschen')); }, enabled: hasDoc },
       ] },
+      { label: 'Neue Einstellungsebene', sub: ADJ_LAYER_TYPES.map((id) => ({ label: ADJUSTMENTS[id].name, run: () => L.adjustLayer(id), enabled: hasDoc })) },
       { label: 'Neue Füllebene', sub: [
         { label: 'Volltonfarbe', run: () => L.fillLayer(), enabled: hasDoc },
         { label: 'Verlauf', run: L.gradientLayer, enabled: hasDoc },
@@ -169,7 +176,22 @@ export const MENUS = [
       ] },
       { label: 'Schnittmaske erstellen', key: 'Alt+Strg+G', run: L.toggleClip, enabled: hasDoc },
       '-',
-      { label: 'Rastern', sub: [{ label: 'Text', run: L.rasterize, enabled: () => doc() && doc().layer.type === 'text' }] },
+      { label: 'Ebenen gruppieren', key: 'Strg+G', run: L.group, enabled: hasDoc },
+      { label: 'Ebenengruppierung aufheben', key: 'Umschalt+Strg+G', run: L.ungroup, enabled: () => doc() && doc().layer.type === 'group' },
+      { label: 'Smart-Objekte', sub: [
+        { label: 'In Smart-Objekt konvertieren', run: L.toSmart, enabled: hasDoc },
+        { label: 'Inhalt bearbeiten', run: L.editSmart, enabled: () => doc() && doc().layer.type === 'smart' },
+        { label: 'Inhalt übernehmen (zurück ins Smart-Objekt)', run: L.commitSmart, enabled: () => doc() && !!doc().smartLink },
+        { label: 'Inhalt ersetzen…', run: L.replaceSmart, enabled: () => doc() && doc().layer.type === 'smart' },
+        { label: 'Rastern', run: L.rasterize, enabled: () => doc() && doc().layer.type === 'smart' },
+      ] },
+      '-',
+      { label: 'Rastern', sub: [
+        { label: 'Ebene', run: L.rasterize, enabled: () => doc() && ['text', 'shape', 'smart'].includes(doc().layer.type) },
+        { label: 'Text', run: L.rasterize, enabled: () => doc() && doc().layer.type === 'text' },
+        { label: 'Form', run: L.rasterize, enabled: () => doc() && doc().layer.type === 'shape' },
+        { label: 'Smart-Objekt', run: L.rasterize, enabled: () => doc() && doc().layer.type === 'smart' },
+      ] },
       '-',
       { label: 'Anordnen', sub: [
         { label: 'In den Vordergrund', key: 'Umschalt+Strg+]', run: L.toTop, enabled: hasDoc },
@@ -182,7 +204,7 @@ export const MENUS = [
         { label: 'Linke Kanten', run: () => alignLayer('left') }, { label: 'Horizontale Mitte', run: () => alignLayer('hcenter') }, { label: 'Rechte Kanten', run: () => alignLayer('right') },
       ] },
       '-',
-      { label: 'Auf eine Ebene reduzieren', key: 'Strg+E', run: L.mergeDown, enabled: hasDoc },
+      { label: () => (doc() && doc().layer.type === 'group' ? 'Gruppe zusammenfügen' : 'Auf eine Ebene reduzieren'), key: 'Strg+E', run: L.mergeDown, enabled: hasDoc },
       { label: 'Sichtbare auf eine Ebene reduzieren', key: 'Umschalt+Strg+E', run: L.mergeVisible, enabled: hasDoc },
       { label: 'Sichtbare stempeln', key: 'Umschalt+Strg+Alt+E', run: L.stampVisible, enabled: hasDoc },
       { label: 'Auf Hintergrundebene reduzieren', run: L.flatten, enabled: hasDoc },

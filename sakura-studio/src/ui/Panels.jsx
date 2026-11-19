@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { S, emit, useStore, useCursor, doc, view, commit, setFg, setBg, L, SELECT, openDialog, saveSwatches, setLayerProp, commitLater, PATTERNS, patternCanvas, toast, IMAGE, EDIT } from '../state.js';
+import { S, emit, useStore, useCursor, doc, view, commit, setFg, setBg, L, SELECT, openDialog, saveSwatches, setLayerProp, commitLater, PATTERNS, patternCanvas, toast, IMAGE, EDIT, ADJ_LAYER_TYPES, renderShapeLayer, startTransform } from '../state.js';
+import { ADJUSTMENTS, FILTERS } from '../engine/filters.js';
+import { childrenOf, descendants, effectiveVisible } from '../engine/doc.js';
+import { ParamRow, CurvesEditor, LevelsHisto } from './Dialogs.jsx';
 import { fmtUnit } from './CanvasView.jsx';
 import { BLEND_MODES } from '../engine/doc.js';
 import { makeCanvas, ctx2d, hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '../engine/util.js';
@@ -140,25 +143,120 @@ function PatternsPanel() {
 }
 
 // ---------------- Eigenschaften ----------------
+function AdjustLayerProps({ l }) {
+  const def = ADJUSTMENTS[l.adjust.id];
+  const p = l.adjust.params;
+  const setP = (np) => { l.adjust.params = typeof np === 'function' ? np(l.adjust.params) : np; l.touch(); view.request(); emit(); commitLater('Einstellungsebene'); };
+  return (
+    <div className="props">
+      <div className="prop-head"><Icon name="adjust" size={16} /> {def.name.replace('…', '')}</div>
+      {def.custom === 'curves' && <CurvesEditor p={p} setP={setP} />}
+      {def.custom === 'levels' && <LevelsHisto p={p} />}
+      <div className="params compact">
+        {def.params.map((x) => <ParamRow key={x.key} x={x} value={p[x.key]} onChange={(v) => setP({ ...l.adjust.params, [x.key]: v })} />)}
+      </div>
+      <div className="row wrap">
+        <button className="btn small" onClick={() => setP(Object.fromEntries(def.params.map((x) => [x.key, x.def])))}>Zurücksetzen</button>
+        <button className="btn small" title="Wirkt nur auf die Ebene direkt darunter" onClick={L.toggleClip}>{l.clip ? 'Schnittmaske lösen' : 'Nur auf Ebene darunter'}</button>
+      </div>
+      <div className="hint">Nicht-destruktiv: Die Werte lassen sich jederzeit ändern. Male in die Maske, um die Wirkung zu begrenzen.</div>
+    </div>
+  );
+}
+
+function ShapeLayerProps({ l }) {
+  const d = doc();
+  const s = l.shape;
+  const set = (k, v, live) => { l.shape = { ...l.shape, [k]: v }; renderShapeLayer(l, d.w, d.h); view.request(); emit(); if (!live) commitLater('Form ändern'); else commitLater('Form ändern', 600); };
+  return (
+    <div className="props">
+      <div className="prop-head"><Icon name={s.kind === 'line' ? 'line' : s.kind === 'ellipse' ? 'ellipse' : s.kind} size={16} /> Formebene</div>
+      <div className="row wrap">
+        <Num label="X" value={Math.round(Math.min(s.x, s.x + s.w))} min={-30000} max={30000} scrub={false} width={56} onChange={(v) => set('x', s.w < 0 ? v - s.w : v)} />
+        <Num label="Y" value={Math.round(Math.min(s.y, s.y + s.h))} min={-30000} max={30000} scrub={false} width={56} onChange={(v) => set('y', s.h < 0 ? v - s.h : v)} />
+        <Num label="B" value={Math.round(Math.abs(s.w))} min={1} max={30000} scrub={false} width={56} onChange={(v) => set('w', Math.sign(s.w || 1) * v)} />
+        <Num label="H" value={Math.round(Math.abs(s.h))} min={1} max={30000} scrub={false} width={56} onChange={(v) => set('h', Math.sign(s.h || 1) * v)} />
+        <Num label="∡" value={Math.round((s.rot || 0) * 180 / Math.PI)} min={-360} max={360} onChange={(v) => set('rot', v * Math.PI / 180)} unit="°" width={44} />
+      </div>
+      {s.kind !== 'line' && <div className="row wrap">
+        <Check label="Fläche" value={s.fillOn !== false} onChange={(v) => set('fillOn', v)} />
+        <input type="color" className="color-in" value={s.fillColor} onChange={(e) => set('fillColor', e.target.value, true)} />
+        <Check label="Kontur" value={!!s.strokeOn} onChange={(v) => set('strokeOn', v)} />
+        <input type="color" className="color-in" value={s.strokeColor} onChange={(e) => set('strokeColor', e.target.value, true)} />
+        <Num value={s.strokeWidth} min={1} max={500} onChange={(v) => set('strokeWidth', v)} unit=" Px" width={44} />
+      </div>}
+      {s.kind === 'line' && <div className="row wrap">
+        <input type="color" className="color-in" value={s.fillColor} onChange={(e) => set('fillColor', e.target.value, true)} />
+        <Num label="Stärke" value={s.lineWidth} min={1} max={500} onChange={(v) => set('lineWidth', v)} unit=" Px" width={44} />
+        <Check label="Pfeilspitze" value={!!s.arrow} onChange={(v) => set('arrow', v)} />
+      </div>}
+      {s.kind === 'rounded' && <Num label="Eckenradius" value={s.radius} min={0} max={2000} onChange={(v) => set('radius', v)} unit=" Px" width={50} />}
+      {(s.kind === 'polygon' || s.kind === 'star') && <Num label="Seiten" value={s.sides} min={3} max={64} onChange={(v) => set('sides', v)} width={40} />}
+      {s.kind === 'star' && <Num label="Einzug" value={Math.round(s.starInner * 100)} min={5} max={95} onChange={(v) => set('starInner', v / 100)} unit="%" width={40} />}
+      <button className="btn small" onClick={() => L.rasterize()}>Form rastern</button>
+    </div>
+  );
+}
+
+function SmartLayerProps({ l }) {
+  const t = l.smart.t;
+  return (
+    <div className="props">
+      <div className="prop-head"><Icon name="image" size={16} /> Smart-Objekt</div>
+      <div className="hint">Quelle: {l.smart.src.width} × {l.smart.src.height} Px · Skalierung {Math.round(Math.abs(t.sx) * 100)} % × {Math.round(Math.abs(t.sy) * 100)} %{t.mesh ? ' · verformt' : ''}</div>
+      <div className="row wrap">
+        <button className="btn small" onClick={() => startTransform()}>Transformieren</button>
+        <button className="btn small" onClick={L.editSmart}>Inhalt bearbeiten</button>
+        <button className="btn small" onClick={L.replaceSmart}>Inhalt ersetzen…</button>
+        <button className="btn small" onClick={() => L.rasterize()}>Rastern</button>
+      </div>
+      {(l.smart.filters || []).length > 0 && <div className="hint">Smartfilter: {l.smart.filters.length} (siehe Ebenen-Bedienfeld)</div>}
+      <div className="hint">Transformationen sind verlustfrei. Filter werden als Smartfilter gespeichert und bleiben abschaltbar.</div>
+    </div>
+  );
+}
+
+function GroupProps({ l }) {
+  const d = doc();
+  return (
+    <div className="props">
+      <div className="prop-head"><Icon name="folder" size={16} /> Gruppe</div>
+      <div className="hint">{descendants(d.layers, l).length} Ebenen · Füllmethode „{l.blend === 'pass' ? 'Hindurchwirken' : l.blend}“</div>
+      <div className="row wrap">
+        <button className="btn small" onClick={L.ungroup}>Gruppierung aufheben</button>
+        <button className="btn small" onClick={L.mergeDown}>Gruppe zusammenfügen</button>
+        <button className="btn small" onClick={L.toSmart}>In Smart-Objekt</button>
+      </div>
+    </div>
+  );
+}
+
 function PropertiesPanel() {
   useStore();
   const [lockRatio, setLock] = useState(true);
   const d = doc();
   if (!d) return <div className="empty-panel">Kein Dokument geöffnet</div>;
   const l = d.layer;
-  if (l && l.type === 'text') {
-    return (
-      <div className="props">
-        <div className="prop-head"><Icon name="type" size={16} /> Textebene</div>
-        <Sel value={l.text.font} onChange={(v) => { updateTextLayer(l, { font: v }); commit('Schrift'); }} options={FONTS.map((f) => [f, f])} width="100%" />
-        <div className="row">
-          <Num label="Größe" value={l.text.size} min={1} max={2000} onChange={(v) => updateTextLayer(l, { size: v })} unit=" Pt" width={50} />
-          <input type="color" className="color-in" value={l.text.color} onChange={(e) => updateTextLayer(l, { color: e.target.value })} />
-        </div>
+  let layerPart = null;
+  if (l && l.type === 'adjust') layerPart = <AdjustLayerProps l={l} key={l.id} />;
+  else if (l && l.type === 'shape' && l.shape) layerPart = <ShapeLayerProps l={l} key={l.id} />;
+  else if (l && l.type === 'smart' && l.smart) layerPart = <SmartLayerProps l={l} key={l.id} />;
+  else if (l && l.type === 'group') layerPart = <GroupProps l={l} key={l.id} />;
+  else if (l && l.type === 'text') layerPart = (
+    <div className="props">
+      <div className="prop-head"><Icon name="type" size={16} /> Textebene</div>
+      <Sel value={l.text.font} onChange={(v) => { updateTextLayer(l, { font: v }); commit('Schrift'); }} options={FONTS.map((f) => [f, f])} width="100%" />
+      <div className="row">
+        <Num label="Größe" value={l.text.size} min={1} max={2000} onChange={(v) => { updateTextLayer(l, { size: v }); commitLater('Schriftgröße'); }} unit=" Pt" width={50} />
+        <input type="color" className="color-in" value={l.text.color} onChange={(e) => { updateTextLayer(l, { color: e.target.value }); commitLater('Textfarbe'); }} />
+      </div>
+      <div className="row wrap">
+        <button className="btn small" onClick={() => { S.ui.flyout = 'character'; emit(); }}>Zeichen…</button>
         <button className="btn small" onClick={() => L.rasterize()}>Text rastern</button>
       </div>
-    );
-  }
+    </div>
+  );
+  if (layerPart) return <div className="props-scroll">{layerPart}{l.mask && <MaskProps l={l} />}</div>;
   return (
     <div className="props">
       <div className="prop-head"><Icon name="doc" size={16} /> Dokument</div>
@@ -176,17 +274,22 @@ function PropertiesPanel() {
         <button className="btn small" onClick={IMAGE.trim}>Zuschneiden</button>
         <button className="btn small" onClick={() => IMAGE.rotate(90)}>↻ 90°</button>
       </div>
-      {l && l.mask && (
-        <>
-          <div className="prop-sub"><Icon name="mask" size={12} /> Ebenenmaske</div>
-          <div className="row wrap">
-            <button className="btn small" onClick={L.invertMask}>Umkehren</button>
-            <button className="btn small" onClick={L.applyMask}>Anwenden</button>
-            <button className="btn small" onClick={() => setLayerProp(l, 'maskEnabled', !l.maskEnabled, 'Maske aktivieren')}>{l.maskEnabled ? 'Deaktivieren' : 'Aktivieren'}</button>
-          </div>
-        </>
-      )}
+      {l && l.mask && <MaskProps l={l} />}
     </div>
+  );
+}
+
+function MaskProps({ l }) {
+  return (
+    <>
+      <div className="prop-sub"><Icon name="mask" size={12} /> Ebenenmaske</div>
+      <div className="row wrap">
+        <button className="btn small" onClick={L.invertMask}>Umkehren</button>
+        {l.hasPixels && <button className="btn small" onClick={L.applyMask}>Anwenden</button>}
+        <button className="btn small" onClick={() => setLayerProp(l, 'maskEnabled', !l.maskEnabled, 'Maske aktivieren')}>{l.maskEnabled ? 'Deaktivieren' : 'Aktivieren'}</button>
+        <button className="btn small" onClick={L.deleteMask}>Löschen</button>
+      </div>
+    </>
   );
 }
 
@@ -194,8 +297,8 @@ function AdjustPanel() {
   const items = [['brightness', '☀', 'Helligkeit/Kontrast'], ['levels', '▥', 'Tonwertkorrektur'], ['curves', '∿', 'Gradationskurven'], ['exposure', '±', 'Belichtung'], ['vibrance', '▽', 'Dynamik'], ['hueSat', '◐', 'Farbton/Sättigung'], ['colorBalance', '⚖', 'Farbbalance'], ['blackWhite', '◑', 'Schwarzweiß'], ['photoFilter', '◎', 'Fotofilter'], ['channelMixer', '⊕', 'Kanalmixer'], ['invert', '◩', 'Umkehren'], ['posterize', '▤', 'Tontrennung'], ['threshold', '◧', 'Schwellenwert'], ['gradientMap', '▭', 'Verlaufsumsetzung'], ['selectiveColor', '✦', 'Selektive Farbkorrektur']];
   return (
     <div className="adj-grid">
-      {items.map(([id, ic, n]) => <button key={id} title={n} onClick={() => runAdjustment(id)}><span>{ic}</span></button>)}
-      <div className="hint">Korrektur auf aktive Ebene/Auswahl anwenden</div>
+      {items.map(([id, ic, n]) => <button key={id} title={n + ' – als Einstellungsebene (Alt+Klick: direkt auf Ebene anwenden)'} onClick={(e) => (e.altKey ? runAdjustment(id) : L.adjustLayer(id))}><span>{ic}</span></button>)}
+      <div className="hint">Klick: neue Einstellungsebene (nicht-destruktiv) · Alt+Klick: direkt auf die Ebene anwenden</div>
     </div>
   );
 }
@@ -256,12 +359,19 @@ function LayersPanel() {
   const [kind, setKind] = useState('all');
   const [renaming, setRenaming] = useState(null);
   const [dragFrom, setDragFrom] = useState(null);
+  const [dropHint, setDropHint] = useState(null);
   const [fxMenu, setFxMenu] = useState(false);
   const [adjMenu, setAdjMenu] = useState(false);
   if (!d) return <div className="empty-panel"><Blossom size={36} /><br />Öffne oder erstelle ein Bild</div>;
   const l = d.layer;
-  const kindOk = (x) => kind === 'all' || (kind === 'text' && x.type === 'text') || (kind === 'pixel' && x.type !== 'text') || (kind === 'mask' && !!x.mask) || (kind === 'fx' && Object.values(x.fx || {}).some((f) => f && f.enabled));
-  const list = d.layers.map((x, i) => ({ x, i })).reverse().filter(({ x }) => kindOk(x) && (!filter || x.name.toLowerCase().includes(filter.toLowerCase())));
+  const kindOk = (x) => kind === 'all' || (kind === 'text' && x.type === 'text') || (kind === 'pixel' && x.type === 'raster') || (kind === 'adjust' && x.type === 'adjust') || (kind === 'shape' && x.type === 'shape') || (kind === 'smart' && x.type === 'smart') || (kind === 'mask' && !!x.mask) || (kind === 'fx' && Object.values(x.fx || {}).some((f) => f && f.enabled));
+  const filtering = kind !== 'all' || !!filter;
+  const rows = [];
+  if (filtering) d.layers.slice().reverse().forEach((x) => { if (kindOk(x) && (!filter || x.name.toLowerCase().includes(filter.toLowerCase()))) rows.push({ x, depth: 0 }); });
+  else {
+    const walk = (pid, depth) => childrenOf(d.layers, pid).slice().reverse().forEach((x) => { rows.push({ x, depth }); if (x.type === 'group' && !x.collapsed) walk(x.id, depth + 1); });
+    walk(null, 0);
+  }
   const tsz = { small: [36, 24], medium: [52, 32], large: [72, 46] }[S.prefs.thumbSize] || [52, 32];
   const lockBtn = (k, ic, title) => (
     <button className={'icon-btn small' + (l[k] ? ' on' : '')} title={title} onClick={() => setLayerProp(l, k, !l[k], 'Fixierung')}><Icon name={ic} size={14} /></button>
@@ -270,12 +380,12 @@ function LayersPanel() {
     <div className="layers">
       <div className="layers-top">
         <div className="search"><Icon name="zoom" size={13} /><input placeholder="Ebenen suchen" value={filter} onChange={(e) => setFilter(e.target.value)} /></div>
-        {[['pixel', 'image', 'Nur Pixelebenen'], ['text', 'type', 'Nur Textebenen'], ['mask', 'mask', 'Nur Ebenen mit Maske'], ['fx', 'fx', 'Nur Ebenen mit Stil']].map(([k, ic, t]) => (
+        {[['pixel', 'image', 'Nur Pixelebenen'], ['adjust', 'adjust', 'Nur Einstellungsebenen'], ['text', 'type', 'Nur Textebenen'], ['shape', 'rect', 'Nur Formebenen'], ['smart', 'object', 'Nur Smart-Objekte'], ['fx', 'fx', 'Nur Ebenen mit Stil']].map(([k, ic, t]) => (
           <button key={k} className={'icon-btn small' + (kind === k ? ' on' : '')} title={t} onClick={() => setKind(kind === k ? 'all' : k)}>{k === 'fx' ? <span className="fx-txt">fx</span> : <Icon name={ic} size={14} />}</button>
         ))}
       </div>
       <div className="layers-row">
-        <Sel value={l.blend} onChange={(v) => setLayerProp(l, 'blend', v, 'Füllmethode')} options={BLEND_MODES} width={150} />
+        <Sel value={l.blend} onChange={(v) => setLayerProp(l, 'blend', v, 'Füllmethode')} options={l.type === 'group' ? [['pass', 'Hindurchwirken'], ...BLEND_MODES] : BLEND_MODES} width={150} />
         <Num label="Deckkraft:" value={Math.round(l.opacity * 100)} onChange={(v) => { l.opacity = v / 100; view.request(); emit(); commitLater('Deckkraft'); }} unit="%" width={50} />
       </div>
       <div className="layers-row">
@@ -286,35 +396,64 @@ function LayersPanel() {
         {lockBtn('lockAll', 'lock', 'Alles fixieren')}
         <Num label="Fläche:" value={Math.round(l.fill * 100)} onChange={(v) => { l.fill = v / 100; view.request(); emit(); commitLater('Fläche'); }} unit="%" width={50} />
       </div>
-      <div className="layer-list">
-        {!list.length && <div className="hint pad">Keine passenden Ebenen</div>}
-        {list.map(({ x, i }) => (
-          <div key={x.id} className={'layer-item' + (i === d.active ? ' active' : '') + (dragFrom === i ? ' dragging' : '')}
-            draggable={renaming !== x.id}
-            onDragStart={() => setDragFrom(i)}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => { if (dragFrom != null && dragFrom !== i) L.reorder(dragFrom, i); setDragFrom(null); }}
-            onMouseDown={() => { if (d.active !== i) { d.active = i; emit(); } }}
-            onDoubleClick={(e) => { if (e.target.classList.contains('lname')) return; openDialog('layerStyle', { tab: 'blend' }); }}>
-            <button className={'eye' + (x.visible ? '' : ' off')} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => {
-              if (e.altKey) { const solo = d.layers.every((y) => y === x || !y.visible); d.layers.forEach((y) => { y.visible = solo ? true : y === x; }); }
-              else x.visible = !x.visible;
-              view.request(); commit('Sichtbarkeit');
-            }}><Icon name="eye" size={15} /></button>
-            {x.clip && <span className="clip-arrow">↳</span>}
-            <span className={'tw' + (!x.editMask ? ' sel' : '')} onMouseDown={() => { x.editMask = false; emit(); }}>
-              {x.type === 'text' ? <span className="text-thumb" style={{ width: tsz[0], height: tsz[1] }}>T</span> : <Thumb canvas={x.canvas} rev={x.rev} w={tsz[0]} h={tsz[1]} />}
-            </span>
-            {x.mask && <span className={'tw mask' + (x.editMask ? ' sel' : '')} onMouseDown={(e) => { e.stopPropagation(); d.active = i; x.editMask = true; emit(); }} onClick={(e) => { if (e.shiftKey) { setLayerProp(x, 'maskEnabled', !x.maskEnabled, 'Maske'); } }}>
-              <Thumb canvas={x.mask} rev={x.rev} mask w={tsz[1]} h={tsz[1]} />{!x.maskEnabled && <span className="mask-off">✕</span>}
-            </span>}
-            {renaming === x.id
-              ? <input className="rename" autoFocus defaultValue={x.name} onBlur={(e) => { x.name = e.target.value || x.name; setRenaming(null); commit('Ebene umbenennen'); }} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenaming(null); }} />
-              : <span className={'lname' + (x.isBackground ? ' bg' : '')} onDoubleClick={() => setRenaming(x.id)}>{x.name}</span>}
-            {Object.values(x.fx || {}).some((f) => f && f.enabled) && <span className="fx-badge" title="Ebenenstil">fx</span>}
-            {(x.lockAll || x.isBackground || x.lockPosition || x.lockPixels) && <span className="lock"><Icon name="lock" size={13} /></span>}
-          </div>
-        ))}
+      <div className="layer-list" onDragOver={(e) => e.preventDefault()}>
+        {!rows.length && <div className="hint pad">Keine passenden Ebenen</div>}
+        {rows.map(({ x, depth }) => {
+          const i = d.layers.indexOf(x);
+          const hidden = !x.visible || !effectiveVisible(d.layers, x);
+          return (
+            <div key={x.id}>
+              <div className={'layer-item' + (i === d.active ? ' active' : '') + (dragFrom === x ? ' dragging' : '') + (hidden ? ' dim' : '') + (dropHint && dropHint.target === x ? ' drop-' + dropHint.where : '')}
+                style={{ paddingLeft: 6 + depth * 18 }}
+                draggable={renaming !== x.id}
+                onDragStart={(e) => { setDragFrom(x); e.dataTransfer.effectAllowed = 'move'; }}
+                onDragEnd={() => { setDragFrom(null); setDropHint(null); }}
+                onDragOver={(e) => {
+                  e.preventDefault(); if (!dragFrom) return;
+                  const r = e.currentTarget.getBoundingClientRect(); const f = (e.clientY - r.top) / r.height;
+                  const where = x.type === 'group' && f > 0.25 && f < 0.75 ? 'into' : f < 0.5 ? 'above' : 'below';
+                  if (!dropHint || dropHint.target !== x || dropHint.where !== where) setDropHint({ target: x, where });
+                }}
+                onDrop={(e) => { e.preventDefault(); if (dragFrom && dropHint) L.dropOn(dragFrom, dropHint.target, dropHint.where); setDragFrom(null); setDropHint(null); }}
+                onMouseDown={() => { if (d.active !== i) { d.active = i; emit(); } }}
+                onDoubleClick={(e) => { if (e.target.classList.contains('lname')) return; if (x.type === 'adjust' || x.type === 'shape' || x.type === 'smart') { S.ui.panelTabs.props = 'props'; delete S.ui.hiddenPanels.props; emit(); return; } if (x.type === 'group') { L.toggleCollapse(x); return; } openDialog('layerStyle', { tab: 'blend' }); }}>
+                <button className={'eye' + (x.visible ? '' : ' off')} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => {
+                  if (e.altKey) { const solo = d.layers.every((y) => y === x || !y.visible); d.layers.forEach((y) => { y.visible = solo ? true : y === x; }); }
+                  else x.visible = !x.visible;
+                  view.request(); commit('Sichtbarkeit');
+                }}><Icon name="eye" size={15} /></button>
+                {x.type === 'group' && <button className={'twisty' + (x.collapsed ? '' : ' open')} onMouseDown={(e) => e.stopPropagation()} onClick={() => L.toggleCollapse(x)}><Icon name="chevron" size={12} /></button>}
+                {x.clip && <span className="clip-arrow">↳</span>}
+                <span className={'tw' + (!x.editMask ? ' sel' : '')} onMouseDown={() => { x.editMask = false; emit(); }}>
+                  {x.type === 'text' ? <span className="text-thumb" style={{ width: tsz[0], height: tsz[1] }}>T</span>
+                    : x.type === 'group' ? <span className="text-thumb" style={{ width: tsz[1], height: tsz[1] }}><Icon name="folder" size={18} /></span>
+                    : x.type === 'adjust' ? <span className="text-thumb adj" style={{ width: tsz[1], height: tsz[1] }}><Icon name="adjust" size={18} /></span>
+                    : <span className="thumbwrap"><Thumb canvas={x.canvas} rev={x.rev} w={tsz[0]} h={tsz[1]} />{x.type === 'smart' && <span className="badge" title="Smart-Objekt">▣</span>}{x.type === 'shape' && <span className="badge" title="Formebene">◆</span>}</span>}
+                </span>
+                {x.mask && <span className={'tw mask' + (x.editMask ? ' sel' : '')} onMouseDown={(e) => { e.stopPropagation(); d.active = i; x.editMask = true; emit(); }} onClick={(e) => { if (e.shiftKey) { setLayerProp(x, 'maskEnabled', !x.maskEnabled, 'Maske'); } }}>
+                  <Thumb canvas={x.mask} rev={x.rev} mask w={tsz[1]} h={tsz[1]} />{!x.maskEnabled && <span className="mask-off">✕</span>}
+                </span>}
+                {renaming === x.id
+                  ? <input className="rename" autoFocus defaultValue={x.name} onBlur={(e) => { x.name = e.target.value || x.name; setRenaming(null); commit('Ebene umbenennen'); }} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenaming(null); }} />
+                  : <span className={'lname' + (x.isBackground ? ' bg' : '')} onDoubleClick={() => setRenaming(x.id)}>{x.name}</span>}
+                {Object.values(x.fx || {}).some((f) => f && f.enabled) && <span className="fx-badge" title="Ebenenstil">fx</span>}
+                {(x.lockAll || x.isBackground || x.lockPosition || x.lockPixels) && <span className="lock"><Icon name="lock" size={13} /></span>}
+              </div>
+              {x.type === 'smart' && x.smart && (x.smart.filters || []).length > 0 && (
+                <div className="smart-filters" style={{ paddingLeft: 40 + depth * 18 }}>
+                  <div className="sf-head">Smartfilter</div>
+                  {x.smart.filters.map((f, fi) => (
+                    <div key={fi} className={'sf-row' + (f.on ? '' : ' off')}>
+                      <button className="eye" onClick={() => L.toggleSmartFilter(x, fi)}><Icon name="eye" size={13} /></button>
+                      <span className="lname">{((f.kind === 'adjust' ? ADJUSTMENTS : FILTERS)[f.id] || { name: f.id }).name.replace('…', '')}</span>
+                      <button className="icon-btn small" title="Smartfilter löschen" onClick={() => L.removeSmartFilter(x, fi)}><Icon name="trash" size={12} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
       <div className="layers-bottom">
         <button className="icon-btn" title="Schnittmaske (Alt+Strg+G)" onClick={L.toggleClip}><Icon name="link" size={16} /></button>
@@ -332,10 +471,10 @@ function LayersPanel() {
             <div className="menu-item" onClick={() => { setAdjMenu(false); L.gradientLayer(); }}>Verlauf</div>
             <div className="menu-item" onClick={() => { setAdjMenu(false); L.patternLayer(); }}>Muster</div>
             <div className="menu-sep" />
-            {['brightness', 'levels', 'curves', 'hueSat', 'colorBalance', 'blackWhite', 'gradientMap', 'invert'].map((id) => <div key={id} className="menu-item" onClick={() => { setAdjMenu(false); runAdjustment(id); }}>{id === 'invert' ? 'Umkehren' : ({ brightness: 'Helligkeit/Kontrast…', levels: 'Tonwertkorrektur…', curves: 'Gradationskurven…', hueSat: 'Farbton/Sättigung…', colorBalance: 'Farbbalance…', blackWhite: 'Schwarzweiß…', gradientMap: 'Verlaufsumsetzung…' })[id]}</div>)}
+            {ADJ_LAYER_TYPES.map((id) => <div key={id} className="menu-item" onClick={() => { setAdjMenu(false); L.adjustLayer(id); }}>{ADJUSTMENTS[id].name.replace('…', '')}</div>)}
           </div>}
         </div>
-        <button className="icon-btn" title="Ebene duplizieren" onClick={L.duplicate}><Icon name="layers" size={16} /></button>
+        <button className="icon-btn" title="Neue Gruppe (Strg+G gruppiert die aktive Ebene)" onClick={L.newGroup}><Icon name="folder" size={16} /></button>
         <button className="icon-btn" title="Neue Ebene (Umschalt+Strg+N)" onClick={L.add}><Icon name="newLayer" size={16} /></button>
         <button className="icon-btn" title="Ebene löschen" onClick={L.remove}><Icon name="trash" size={16} /></button>
       </div>

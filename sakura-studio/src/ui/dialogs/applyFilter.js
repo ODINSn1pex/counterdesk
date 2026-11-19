@@ -1,5 +1,5 @@
 // Filter/Korrekturen auf aktive Ebene (oder Maske) anwenden – Vorschau im Hintergrund-Thread
-import { S, doc, commit, view, emit, toast, canEditPixels } from '../../state.js';
+import { S, doc, commit, view, emit, toast, canEditPixels, renderSmartLayer } from '../../state.js';
 import { cloneCanvas, ctx2d, ctxRead, makeCanvas } from '../../engine/util.js';
 import { applyMasked } from '../../engine/selection.js';
 import { runFilter, cancelFilters } from '../../engine/filterRunner.js';
@@ -24,6 +24,10 @@ function grayToMask(g) {
 
 export function beginPreview() {
   const d = doc(); if (!d) return null;
+  const sl = d.layer;
+  if (sl && sl.type === 'smart' && !sl.editMask) {
+    return { d, smart: true, layer: sl, orig: JSON.parse(JSON.stringify(sl.smart.filters || [])), gen: 0, t: { layer: sl } };
+  }
   const t = target(d); if (!t) return null;
   const before = cloneCanvas(t.canvas);
   return { d, t, before, src: t.mask ? maskToGray(before) : before, gen: 0 };
@@ -45,8 +49,15 @@ function restoreBefore(pv) {
 }
 
 // Vorschau berechnen; ältere, noch laufende Berechnungen werden verworfen
+function smartApply(pv, kind, id, params) {
+  pv.layer.smart.filters = [...pv.orig, { kind, id, params, on: true }];
+  renderSmartLayer(pv.layer, pv.d.w, pv.d.h);
+  view.request();
+}
+
 export async function previewFilter(pv, kind, id, params, fast) {
   if (!pv) return false;
+  if (pv.smart) { smartApply(pv, kind, id, params); return true; }
   const gen = ++pv.gen;
   cancelFilters();
   let src = pv.src;
@@ -68,10 +79,15 @@ export async function previewFilter(pv, kind, id, params, fast) {
   }
 }
 
-export function showOriginal(pv) { if (pv) { pv.gen++; cancelFilters(); restoreBefore(pv); } }
+export function showOriginal(pv) {
+  if (!pv) return;
+  if (pv.smart) { pv.layer.smart.filters = pv.orig; renderSmartLayer(pv.layer, pv.d.w, pv.d.h); view.request(); return; }
+  pv.gen++; cancelFilters(); restoreBefore(pv);
+}
 
 export async function finishFilter(pv, kind, id, params, name) {
   if (!pv) return;
+  if (pv.smart) { smartApply(pv, kind, id, params); commit('Smartfilter: ' + name); return; }
   pv.gen++;
   cancelFilters();
   try {
@@ -83,7 +99,11 @@ export async function finishFilter(pv, kind, id, params, name) {
   }
 }
 
-export function cancelPreview(pv) { if (!pv) return; pv.gen++; cancelFilters(); restoreBefore(pv); emit(); }
+export function cancelPreview(pv) {
+  if (!pv) return;
+  if (pv.smart) { showOriginal(pv); emit(); return; }
+  pv.gen++; cancelFilters(); restoreBefore(pv); emit();
+}
 
 // Direkt anwenden (Filter ohne Parameter)
 export async function applyFilterToLayer(kind, id, params, name) {

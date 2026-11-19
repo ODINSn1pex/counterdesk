@@ -146,7 +146,7 @@ function FilterDialog({ dg }) {
   );
 }
 
-function ParamRow({ x, value, onChange }) {
+export function ParamRow({ x, value, onChange }) {
   if (x.type === 'checkbox') return <Check label={x.label} value={value} onChange={onChange} />;
   if (x.type === 'select') return <label className="prow"><span>{x.label}</span><Sel value={value} onChange={onChange} options={x.options} width={180} /></label>;
   if (x.type === 'color') return <label className="prow"><span>{x.label}</span><input type="color" className="color-in" value={value} onChange={(e) => onChange(e.target.value)} /></label>;
@@ -159,7 +159,7 @@ function ParamRow({ x, value, onChange }) {
   );
 }
 
-function LevelsHisto() {
+export function LevelsHisto() {
   const d = doc();
   const h = useMemo(() => histogram(d.layer.canvas), []);
   const max = Math.max(...h.l, 1);
@@ -170,7 +170,7 @@ function LevelsHisto() {
   );
 }
 
-function CurvesEditor({ p, setP }) {
+export function CurvesEditor({ p, setP }) {
   const [ch, setCh] = useState('rgb');
   const pts = p[ch] || [[0, 0], [255, 255]];
   const ref = useRef(null);

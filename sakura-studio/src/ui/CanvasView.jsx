@@ -3,6 +3,7 @@ import { S, doc, view, emit, emitCursor, useStore, openBytes, placeImage, VIEW, 
 import { composite } from '../engine/doc.js';
 import { makeCanvas, ctx2d, loadImage } from '../engine/util.js';
 import { edgeCanvas } from '../engine/selection.js';
+import { warpMap as warpMapUI } from '../engine/mesh.js';
 import * as TL from '../tools.js';
 import { TextEditor } from './TextEditor.jsx';
 
@@ -250,7 +251,27 @@ export function CanvasView() {
       TL.cropHandles().forEach((h) => { x.fillRect(g.ox + h.x * g.z - 5, g.oy + h.y * g.z - 5, 10, 10); });
       x.restore();
     }
-    if (S.transform) {
+    if (S.transform && S.transform.mesh) {
+      const t = S.transform;
+      x.save(); x.strokeStyle = col.accent; x.lineWidth = 1;
+      const P = (q) => [g.ox + q.x * g.z, g.oy + q.y * g.z];
+      if (t.mesh === 'warp') {
+        // Hüllkurve des Verformungsfeldes + Kontrollgitter
+        const m = warpMapUI(t.grid);
+        x.globalAlpha = 0.9; x.beginPath();
+        for (let k = 0; k <= 3; k++) { for (let s2 = 0; s2 <= 24; s2++) { const q = m(k / 3, s2 / 24); s2 ? x.lineTo(...P(q)) : x.moveTo(...P(q)); } for (let s2 = 0; s2 <= 24; s2++) { const q = m(s2 / 24, k / 3); s2 ? x.lineTo(...P(q)) : x.moveTo(...P(q)); } }
+        x.stroke();
+        x.globalAlpha = 0.5; x.setLineDash([3, 3]); x.beginPath();
+        t.grid.forEach((r) => r.forEach((q, i) => { i ? x.lineTo(...P(q)) : x.moveTo(...P(q)); }));
+        for (let i = 0; i < 4; i++) t.grid.forEach((r, j) => { j ? x.lineTo(...P(r[i])) : x.moveTo(...P(r[i])); });
+        x.stroke(); x.setLineDash([]); x.globalAlpha = 1;
+        TL.meshPoints(t).forEach((q) => { const [sx, sy] = P(q); x.fillStyle = '#fff'; x.beginPath(); x.arc(sx, sy, 4, 0, 7); x.fill(); x.stroke(); });
+      } else {
+        x.beginPath(); t.corners.forEach((q, i) => (i ? x.lineTo(...P(q)) : x.moveTo(...P(q)))); x.closePath(); x.stroke();
+        t.corners.forEach((q) => { const [sx, sy] = P(q); x.fillStyle = '#fff'; x.fillRect(sx - 5, sy - 5, 10, 10); x.strokeRect(sx - 5, sy - 5, 10, 10); });
+      }
+      x.restore();
+    } else if (S.transform) {
       const hs = TL.transformHandles(S.transform);
       x.save(); x.strokeStyle = col.accent; x.lineWidth = 1.2;
       x.beginPath();
