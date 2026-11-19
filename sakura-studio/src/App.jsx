@@ -70,6 +70,7 @@ function Shell() {
 export default function App() {
   useEffect(() => {
     applyTheme();
+    import('./tools.js').then((m) => m.loadCustomTips());
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     const closeMenus = () => { if (S.ui.menu) { S.ui.menu = null; emit(); } };

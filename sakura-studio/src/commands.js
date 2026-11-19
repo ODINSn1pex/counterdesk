@@ -5,7 +5,7 @@ import {
   newDocument, openRecent, applyCrop, finishTextEdit, PATTERNS,
 } from './state.js';
 import { ADJUSTMENTS, FILTERS } from './engine/filters.js';
-import { PATHS, alignLayer, nudge, cancelOp, finishPoly, finishPath } from './tools.js';
+import { PATHS, alignLayer, nudge, cancelOp, finishPoly, finishPath, textOnPath, definePresetFromSelection, makeTipFromCanvas } from './tools.js';
 import { ADJ_LAYER_TYPES } from './state.js';
 
 const hasDoc = () => !!doc();
@@ -73,11 +73,12 @@ export const MENUS = [
       { label: 'Kontur füllen…', run: () => openDialog('stroke'), enabled: hasSel },
       { label: 'Inhaltsbasierte Füllung', run: () => EDIT.fill('content'), enabled: hasSel },
       '-',
-      { label: 'Frei transformieren', key: 'Strg+T', run: startTransform, enabled: hasDoc },
+      { label: 'Frei transformieren', key: 'Strg+T', run: () => startTransform(), enabled: hasDoc },
       { label: 'Transformieren', sub: [
         { label: 'Verzerren', run: () => startTransform('distort'), enabled: hasDoc },
         { label: 'Perspektivisch', run: () => startTransform('perspective'), enabled: hasDoc },
         { label: 'Verformen', run: () => startTransform('warp'), enabled: hasDoc },
+        { label: 'Formgitter', run: () => startTransform('puppet'), enabled: hasDoc },
         '-',
         { label: '180° drehen', run: () => transformLayer('r180'), enabled: hasDoc },
         { label: '90° im UZS drehen', run: () => transformLayer('r90'), enabled: hasDoc },
@@ -91,6 +92,8 @@ export const MENUS = [
         { label: 'Oberkanten', run: () => alignLayer('top') }, { label: 'Vertikale Mitte', run: () => alignLayer('vcenter') }, { label: 'Unterkanten', run: () => alignLayer('bottom') },
       ] },
       '-',
+      { label: 'Pinselvorgabe festlegen (aus Auswahl)…', run: definePresetFromSelection, enabled: hasDoc },
+      { label: 'Pinselspitze aus Bild importieren…', run: importBrushImage },
       { label: 'Farbfelder & Verläufe zurücksetzen', run: () => { localStorage.removeItem('sakura.swatches'); localStorage.removeItem('sakura.gradients'); toast('Wird beim nächsten Start zurückgesetzt'); } },
       { label: 'Tastaturbefehle…', key: 'Alt+Umschalt+Strg+K', run: () => openDialog('shortcuts') },
       { label: 'Voreinstellungen…', key: 'Strg+K', run: () => openDialog('prefs') },
@@ -131,6 +134,7 @@ export const MENUS = [
       { label: 'Zuschneiden (Transparenz)', run: IMAGE.trim, enabled: hasDoc },
       '-',
       { label: 'Duplizieren…', run: IMAGE.duplicate, enabled: hasDoc },
+      { label: 'Aktion ausführen', sub: () => S.actions.map((a) => ({ label: a.name, run: () => import('./actions.js').then((m) => m.playAction(a)), enabled: hasDoc })) },
       { label: 'Histogramm…', run: () => openDialog('histogram'), enabled: hasDoc },
     ],
   },
@@ -175,6 +179,7 @@ export const MENUS = [
         { label: 'Umkehren', run: L.invertMask, enabled: () => doc() && !!doc().layer.mask },
       ] },
       { label: 'Schnittmaske erstellen', key: 'Alt+Strg+G', run: L.toggleClip, enabled: hasDoc },
+      { label: 'Hintergrund entfernen (KI)', run: L.removeBackground, enabled: hasDoc },
       '-',
       { label: 'Ebenen gruppieren', key: 'Strg+G', run: L.group, enabled: hasDoc },
       { label: 'Ebenengruppierung aufheben', key: 'Umschalt+Strg+G', run: L.ungroup, enabled: () => doc() && doc().layer.type === 'group' },
@@ -214,6 +219,7 @@ export const MENUS = [
     id: 'type', label: 'Schrift', items: [
       { label: 'Textwerkzeug', key: 'T', run: () => setTool('type', 'h') },
       { label: 'Vertikales Textwerkzeug', run: () => setTool('type', 'v') },
+      { label: 'Text auf Pfad erstellen', run: textOnPath, enabled: () => doc() && doc().paths.some((p) => p.points.length > 1) },
       '-',
       { label: 'Zeichen-Bedienfeld', run: () => { S.ui.flyout = 'character'; emit(); } },
       { label: 'Textebene rastern', run: L.rasterize, enabled: () => doc() && doc().layer.type === 'text' },
@@ -229,7 +235,8 @@ export const MENUS = [
       '-',
       { label: 'Ebenentransparenz als Auswahl', run: SELECT.allLayersOpaque, enabled: hasDoc },
       { label: 'Farbbereich…', run: () => openDialog('colorRange'), enabled: hasDoc },
-      { label: 'Motiv', run: SELECT.subject, enabled: hasDoc },
+      { label: 'Motiv (KI)', run: SELECT.subject, enabled: hasDoc },
+      { label: 'Motiv (klassisch, schnell)', run: SELECT.subjectClassic, enabled: hasDoc },
       '-',
       { label: 'Auswählen und maskieren…', key: 'Alt+Strg+R', run: () => openDialog('selectMask'), enabled: hasSel },
       { label: 'Auswahl verändern', sub: [
@@ -252,6 +259,8 @@ export const MENUS = [
     id: 'filter', label: 'Filter', items: [
       { label: () => `Letzter Filter${S.lastFilter ? ': ' + FILTERS[S.lastFilter].name.replace('…', '') : ''}`, key: 'Alt+Strg+F', run: () => S.lastFilter && runFilter(S.lastFilter), enabled: () => hasDoc() && !!S.lastFilter },
       '-',
+      { label: 'Verflüssigen…', key: 'Umschalt+Strg+X', run: () => openDialog('liquify'), enabled: hasDoc },
+      '-',
       ...Object.entries(filterGroups).map(([g, items]) => ({ label: g, sub: items })),
     ],
   },
@@ -270,6 +279,9 @@ export const MENUS = [
         { label: 'Blau', key: 'Strg+5', run: () => setChannels({ r: false, g: false, b: true }), enabled: hasDoc },
       ] },
       '-',
+      { label: () => (S.ui.proof ? '✓ ' : '') + 'Proof-Farben (CMYK-Näherung)', key: 'Strg+Y', run: () => VIEW.toggle('proof'), enabled: hasDoc },
+      { label: () => (S.ui.gamut ? '✓ ' : '') + 'Farbumfang-Warnung', key: 'Umschalt+Strg+Y', run: () => VIEW.toggle('gamut'), enabled: hasDoc },
+      '-',
       { label: () => (S.ui.showRulers ? '✓ ' : '') + 'Lineale', key: 'Strg+R', run: () => VIEW.toggle('showRulers') },
       { label: () => (S.ui.showGrid ? '✓ ' : '') + 'Raster', key: "Strg+'", run: () => VIEW.toggle('showGrid') },
       { label: () => (S.ui.showGuides ? '✓ ' : '') + 'Hilfslinien', key: 'Strg+,', run: () => VIEW.toggle('showGuides') },
@@ -287,7 +299,7 @@ export const MENUS = [
       '-',
       ...[['layers', 'Ebenen'], ['channels', 'Kanäle'], ['paths', 'Pfade']].map(([k, n]) => ({ label: n, key: k === 'layers' ? 'F7' : undefined, run: () => showPanel('layers', k) })),
       '-',
-      ...[['history', 'Protokoll'], ['navigator', 'Navigator'], ['info', 'Info'], ['brushes', 'Pinsel'], ['character', 'Zeichen'], ['paragraph', 'Absatz']].map(([k, n]) => ({ label: n, run: () => { S.ui.flyout = S.ui.flyout === k ? null : k; emit(); } })),
+      ...[['history', 'Protokoll'], ['actions', 'Aktionen'], ['navigator', 'Navigator'], ['info', 'Info'], ['brushes', 'Pinsel'], ['character', 'Zeichen'], ['paragraph', 'Absatz']].map(([k, n]) => ({ label: n, run: () => { S.ui.flyout = S.ui.flyout === k ? null : k; emit(); } })),
       '-',
       { label: 'Arbeitsbereich zurücksetzen', run: () => { S.ui.hiddenPanels = {}; S.ui.flyout = null; localStorage.removeItem('sakura.hiddenPanels'); emit(); } },
     ],
@@ -302,6 +314,18 @@ export const MENUS = [
     ],
   },
 ];
+
+async function importBrushImage() {
+  let files;
+  if (window.native) files = await window.native.openDialog({ title: 'Pinselspitze importieren (PNG/JPG, dunkel = Farbe)', filters: [{ name: 'Bilder', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
+  else files = await new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; i.onchange = async () => res([{ name: i.files[0].name, data: new Uint8Array(await i.files[0].arrayBuffer()) }]); i.click(); });
+  const f = files && files[0]; if (!f) return;
+  const img = new Image(); img.src = URL.createObjectURL(new Blob([f.data])); await img.decode();
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0);
+  makeTipFromCanvas(c, f.name.replace(/\.[^.]+$/, ''));
+  setTool('brush', 'brush');
+  toast('Pinselspitze importiert');
+}
 
 function setChannels(o) { const d = doc(); if (!d) return; d.channelView = o; view.request(); emit(); }
 function cycleScreenMode() {

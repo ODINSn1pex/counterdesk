@@ -80,7 +80,38 @@ export function gridFromCorners(c) {
 }
 
 export function meshMapFor(t) {
+  if (t.mesh === 'puppet') { const base = bilinearMap(t.corners); const f = mlsRigid(t.pins || []); return (u, v) => f(base(u, v)); }
   if (t.mesh === 'warp') return warpMap(t.grid);
   if (t.mesh === 'perspective') return perspectiveMap(t.corners);
   return bilinearMap(t.corners);
+}
+
+// Formgitter: starre Moving-Least-Squares-Verformung (Schaefer et al. 2006)
+export function mlsRigid(pins) {
+  return (v) => {
+    const n = pins.length;
+    if (!n) return v;
+    if (n === 1) return { x: v.x + pins[0].q.x - pins[0].p.x, y: v.y + pins[0].q.y - pins[0].p.y };
+    let sw = 0, px = 0, py = 0, qx = 0, qy = 0;
+    const w = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const dx = pins[i].p.x - v.x, dy = pins[i].p.y - v.y, d2 = dx * dx + dy * dy;
+      if (d2 < 1e-6) return { ...pins[i].q };
+      w[i] = 1 / d2; sw += w[i];
+      px += w[i] * pins[i].p.x; py += w[i] * pins[i].p.y; qx += w[i] * pins[i].q.x; qy += w[i] * pins[i].q.y;
+    }
+    px /= sw; py /= sw; qx /= sw; qy /= sw;
+    // Komplexe Formulierung: f(v) = q* + |v-p*| · normalize((v-p*) · Σ w conj(p̂) q̂)
+    let ar = 0, ai = 0;
+    for (let i = 0; i < n; i++) {
+      const phx = pins[i].p.x - px, phy = pins[i].p.y - py, qhx = pins[i].q.x - qx, qhy = pins[i].q.y - qy;
+      ar += w[i] * (phx * qhx + phy * qhy);
+      ai += w[i] * (phx * qhy - phy * qhx);
+    }
+    const vx = v.x - px, vy = v.y - py;
+    const rx = vx * ar - vy * ai, ry = vx * ai + vy * ar;
+    const len = Math.hypot(rx, ry), vl = Math.hypot(vx, vy);
+    if (len < 1e-9) return { x: qx + vx, y: qy + vy };
+    return { x: qx + rx / len * vl, y: qy + ry / len * vl };
+  };
 }

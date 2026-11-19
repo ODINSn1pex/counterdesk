@@ -48,7 +48,7 @@ export const DEFAULT_PREFS = {
   wheelZoom: false, animatedZoom: true, brushCursor: 'normal', pressureSize: true, pressureOpacity: false,
   proportionalTransform: true, nudgeStep: 10, snapDistance: 6,
   // Leistung
-  fastPreview: true, hardwareAcceleration: true,
+  fastPreview: true, hardwareAcceleration: true, aiModel: 'isnet-anime',
   // Transparenz & Raster
   checker: 'medium', checkerTone: 'light', gridSpacing: 50, gridSub: 4, gridColor: '#ff9ad5', guideColor: '#3ce0ff', pixelGrid: true,
   // Einheiten
@@ -81,6 +81,7 @@ export const S = {
   gradients: LS.get('gradients', null) || DEFAULT_GRADIENTS,
   swatches: LS.get('swatches', null) || DEFAULT_SWATCHES,
   recentColors: LS.get('recentColors', []),
+  customBrushes: LS.get('customBrushes', []),
   recent: LS.get('recent', []),
   prefs: { ...DEFAULT_PREFS, ...LS.get('prefs', {}) },
   ui: {
@@ -225,11 +226,38 @@ export function closeDoc(id, force = false) {
 
 // ---------------- Datei-IO ----------------
 const IMG_FILTERS = [
-  { name: 'Alle unterstützten', extensions: ['sakura', 'psd', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico'] },
+  { name: 'Alle unterstützten', extensions: ['sakura', 'psd', 'psb', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif', 'cr2', 'cr3', 'nef', 'arw', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw'] },
+  { name: 'Kamera-RAW (Vorschau)', extensions: ['cr2', 'cr3', 'nef', 'nrw', 'arw', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw'] },
   { name: 'Sakura-Projekt', extensions: ['sakura'] },
   { name: 'Photoshop-Datei (PSD)', extensions: ['psd'] },
-  { name: 'Bilder', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico'] },
+  { name: 'Bilder', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif'] },
 ];
+
+export const RAW_EXT = ['cr2', 'cr3', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw', 'x3f', '3fr', 'iiq', 'erf', 'kdc', 'mrw'];
+// Größtes eingebettetes JPEG einer RAW-Datei finden
+function extractRawPreview(b) {
+  let best = null;
+  for (let i = 0; i < b.length - 3; i++) {
+    if (b[i] !== 0xff || b[i + 1] !== 0xd8 || b[i + 2] !== 0xff) continue;
+    // Segmente durchlaufen bis Bilddaten (SOS), dann EOI suchen
+    let j = i + 2, ok = false;
+    while (j < b.length - 4) {
+      if (b[j] !== 0xff) break;
+      const m = b[j + 1];
+      if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7) || m === 0x01) { j += 2; continue; }
+      const len = (b[j + 2] << 8) | b[j + 3];
+      if (m === 0xda) { ok = true; j += 2 + len; break; }
+      j += 2 + len;
+    }
+    if (!ok) continue;
+    let k = j;
+    while (k < b.length - 1 && !(b[k] === 0xff && b[k + 1] === 0xd9)) k++;
+    const size = k + 2 - i;
+    if (!best || size > best[1]) best = [i, size];
+    i = k;
+  }
+  return best && best[1] > 2048 ? b.slice(best[0], best[0] + best[1]) : null;
+}
 
 function mimeFor(name) {
   const e = name.split('.').pop().toLowerCase();
@@ -247,7 +275,16 @@ export async function openBytes(name, bytes, path) {
   try {
     let d;
     if (ext === 'sakura') d = await loadProject(new TextDecoder().decode(bytes), name);
-    else if (ext === 'psd') d = readPsd(bytes, name.replace(/\.psd$/i, ''));
+    else if (ext === 'psd' || ext === 'psb') d = readPsd(bytes, name.replace(/\.ps[db]$/i, ''));
+    else if (RAW_EXT.includes(ext)) {
+      const jpg = extractRawPreview(bytes);
+      if (!jpg) throw new Error('Keine eingebettete Vorschau in der RAW-Datei gefunden');
+      const url = URL.createObjectURL(new Blob([jpg], { type: 'image/jpeg' }));
+      const img = await loadImage(url);
+      d = docFromImage(img, name.replace(/\.[^.]+$/, '') + '.jpg');
+      URL.revokeObjectURL(url);
+      setTimeout(() => toast('RAW: eingebettete Kamera-Vorschau geöffnet (JPEG-Qualität, keine RAW-Entwicklung)', 5000), 300);
+    }
     else {
       const url = URL.createObjectURL(new Blob([bytes], { type: mimeFor(name) }));
       const img = await loadImage(url);
@@ -294,7 +331,7 @@ export async function openRecent(p) {
 export async function placeFile() {
   const d = doc(); if (!d) return;
   let files;
-  if (window.native) files = await window.native.openDialog({ title: 'Platzieren', filters: [IMG_FILTERS[3]] });
+  if (window.native) files = await window.native.openDialog({ title: 'Platzieren', filters: [IMG_FILTERS.find((f) => f.name === 'Bilder')] });
   else files = await pickFileBrowser('image/*');
   for (const f of files) {
     const url = URL.createObjectURL(new Blob([f.data], { type: mimeFor(f.name) }));
@@ -737,7 +774,7 @@ export const L = {
   replaceSmart: async () => {
     const d = doc(); const l = d && d.layer; if (!l || l.type !== 'smart') { toast('Kein Smart-Objekt gewählt'); return; }
     let files;
-    if (window.native) files = await window.native.openDialog({ title: 'Inhalt ersetzen', filters: [IMG_FILTERS[3]] });
+    if (window.native) files = await window.native.openDialog({ title: 'Inhalt ersetzen', filters: [IMG_FILTERS.find((f) => f.name === 'Bilder')] });
     else files = await pickFileBrowser('image/*');
     const f = files[0]; if (!f) return;
     const img = await loadImage(URL.createObjectURL(new Blob([f.data], { type: mimeFor(f.name) })));
@@ -749,6 +786,22 @@ export const L = {
   },
   toggleSmartFilter: (l, i) => { const f = l.smart.filters[i]; f.on = !f.on; const d = doc(); renderSmartLayer(l, d.w, d.h); commit('Smartfilter'); },
   removeSmartFilter: (l, i) => { l.smart.filters.splice(i, 1); const d = doc(); renderSmartLayer(l, d.w, d.h); commit('Smartfilter löschen'); },
+  // ---- KI: Hintergrund entfernen (als Ebenenmaske, nicht-destruktiv) ----
+  removeBackground: async () => {
+    const d = doc(); if (!d) return;
+    const l = d.layer;
+    if (!l.hasPixels) { toast('Bitte eine Pixel-Ebene wählen'); return; }
+    S.ui.busy = 'KI entfernt Hintergrund'; emit();
+    try {
+      const { aiSubjectMask } = await import('./engine/ai.js');
+      const m = await aiSubjectMask(l.canvas, S.prefs.aiModel);
+      if (l.isBackground) { l.isBackground = false; l.lockPosition = false; if (l.name === 'Hintergrund') l.name = 'Ebene 0'; }
+      l.mask = m; l.maskEnabled = true; l.editMask = false; l.touch();
+      commit('Hintergrund entfernen (KI)');
+      toast('Hintergrund als Maske entfernt – mit Pinsel in der Maske nachbessern');
+    } catch (e) { console.error(e); toast('KI-Freistellung fehlgeschlagen: ' + e.message); }
+    S.ui.busy = null; emit(); view.request();
+  },
   // ---- Füllebenen ----
   fillLayer: (color) => layerOp((d) => {
     const n = new Layer(d.w, d.h, 'Farbfüllung 1'); const x = n.ctx; x.fillStyle = color || S.fg; x.fillRect(0, 0, d.w, d.h);
@@ -827,10 +880,23 @@ export const SELECT = {
     d.setSelection(fn(d.selection, r));
     commit({ feather: 'Weiche Auswahlkante', expand: 'Auswahl erweitern', contract: 'Auswahl verkleinern', smooth: 'Auswahl abrunden', border: 'Auswahlumrandung' }[kind]);
   },
-  subject: () => {
+  // Motiv auswählen: lokale KI (Fallback: klassisches Verfahren)
+  subject: async () => {
     const d = doc(); if (!d) return;
-    d.setSelection(SEL.selectSubject(getMerged(d))); commit('Motiv auswählen');
+    S.ui.busy = 'KI erkennt Motiv'; emit();
+    try {
+      const { aiSubjectMask } = await import('./engine/ai.js');
+      const t0 = performance.now();
+      const m = await aiSubjectMask(getMerged(d), S.prefs.aiModel);
+      d.setSelection(m); commit('Motiv auswählen (KI)');
+      toast(`Motiv erkannt (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
+    } catch (e) {
+      console.warn('KI nicht verfügbar, nutze Fallback', e);
+      d.setSelection(SEL.selectSubject(getMerged(d))); commit('Motiv auswählen');
+    }
+    S.ui.busy = null; emit(); view.request();
   },
+  subjectClassic: () => { const d = doc(); if (!d) return; d.setSelection(SEL.selectSubject(getMerged(d))); commit('Motiv auswählen'); },
   colorRange: (hex, fuzz) => {
     const d = doc(); if (!d) return;
     d.setSelection(SEL.colorRange(getMerged(d), hex, fuzz)); commit('Farbbereich');
@@ -1084,6 +1150,7 @@ export const IMAGE = {
 // Transformationen der aktiven Ebene (Bearbeiten > Transformieren)
 export function transformLayer(kind) {
   const d = doc(); if (!d) return;
+  recordStep({ type: 'transform', kind });
   const l = d.layer; if (!canEditPixels(l)) return;
   const src = cloneCanvas(l.canvas);
   const sel = d.selection;
@@ -1116,7 +1183,7 @@ export function startTransform(mesh) {
     const sm = l.smart, t0 = sm.t;
     S.transform = { layer: l, smart: true, before, base: makeCanvas(d.w, d.h), piece: sm.src, w: sm.src.width, h: sm.src.height,
       cx: t0.cx, cy: t0.cy, cx0: t0.cx, cy0: t0.cy, sx: t0.sx, sy: t0.sy, rot: t0.rot || 0, skx: t0.skx || 0,
-      mesh: t0.mesh || null, corners: t0.corners ? t0.corners.map((p) => ({ ...p })) : null, grid: t0.grid ? t0.grid.map((r) => r.map((p) => ({ ...p }))) : null };
+      mesh: t0.mesh || null, corners: t0.corners ? t0.corners.map((p) => ({ ...p })) : null, grid: t0.grid ? t0.grid.map((r) => r.map((p) => ({ ...p }))) : null, pins: t0.pins ? JSON.parse(JSON.stringify(t0.pins)) : null };
     if (S.tool !== 'move') S.tool = 'move';
     if (mesh) setTransformMode(mesh); else renderTransform();
     emit(); return;
@@ -1153,6 +1220,13 @@ export function setTransformMode(mode) {
   }
   if (t.vectorShape) { rasterize(t.layer); t.vectorShape = false; toast('Formebene wurde gerastert'); }
   if (!t.mesh) t.corners = freeCorners(t);
+  if (mode === 'puppet') {
+    if (t.mesh === 'warp') t.corners = [t.grid[0][0], t.grid[0][3], t.grid[3][3], t.grid[3][0]].map((p) => ({ ...p }));
+    t.pins = t.pins || [];
+    t.mesh = 'puppet';
+    toast('Formgitter: Klicke ins Motiv, um Pins zu setzen, und ziehe sie. Alt+Klick entfernt einen Pin.', 4500);
+    renderTransform(); emit(); return;
+  }
   if (mode === 'warp' && (!t.grid || t.mesh !== 'warp')) t.grid = gridFromCorners(t.corners);
   if (mode !== 'warp' && t.mesh === 'warp') t.corners = [t.grid[0][0], t.grid[0][3], t.grid[3][3], t.grid[3][0]].map((p) => ({ ...p }));
   t.mesh = mode;
@@ -1160,7 +1234,7 @@ export function setTransformMode(mode) {
 }
 
 function drawTransformed(x, t, img) {
-  if (t.mesh) { drawMesh(x, img, meshMapFor(t), t.mesh === 'warp' ? 24 : 16); return; }
+  if (t.mesh) { drawMesh(x, img, meshMapFor(t), t.mesh === 'warp' || t.mesh === 'puppet' ? 28 : 16); return; }
   x.save();
   x.translate(t.cx, t.cy); x.rotate(t.rot); x.transform(1, 0, Math.tan(t.skx || 0), 1, 0, 0); x.scale(t.sx, t.sy);
   x.imageSmoothingQuality = 'high';
@@ -1191,7 +1265,7 @@ export function applyTransform() {
   const d = doc();
   const l = t.layer;
   if (t.smart) {
-    l.smart = { ...l.smart, t: { cx: t.cx, cy: t.cy, sx: t.sx, sy: t.sy, rot: t.rot, skx: t.skx, mesh: t.mesh, corners: t.corners, grid: t.grid } };
+    l.smart = { ...l.smart, t: { cx: t.cx, cy: t.cy, sx: t.sx, sy: t.sy, rot: t.rot, skx: t.skx, mesh: t.mesh, corners: t.corners, grid: t.grid, pins: t.pins } };
     S.transform = null;
     renderSmartLayer(l, d.w, d.h);
     commit('Smart-Objekt transformieren');
@@ -1212,7 +1286,7 @@ export function applyTransform() {
     d.setSelection(s2);
   }
   S.transform = null;
-  commit(t.mesh ? { warp: 'Verformen', perspective: 'Perspektivisch verzerren', distort: 'Verzerren' }[t.mesh] : 'Frei transformieren');
+  commit(t.mesh ? { warp: 'Verformen', perspective: 'Perspektivisch verzerren', distort: 'Verzerren', puppet: 'Formgitter' }[t.mesh] : 'Frei transformieren');
 }
 
 export function cancelTransform() {
@@ -1343,3 +1417,27 @@ export function saveSwatches() { LS.set('swatches', S.swatches); LS.set('gradien
 export function maskColorIsReveal() { return luminance(S.fg) >= 0.5; }
 
 export { SEL, flattenToCanvas, composite, renderTextLayer, Layer, renderShapeLayer };
+
+
+// ---------------- Aktionen: Aufzeichnung ----------------
+export const REC = { on: false, steps: null, depth: 0, action: null };
+const isPlain = (v, depth = 0) => v === null || v === undefined || ['string', 'number', 'boolean'].includes(typeof v)
+  || (Array.isArray(v) ? depth < 5 && v.every((x) => isPlain(x, depth + 1)) : (typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype && depth < 5 && Object.values(v).every((x) => isPlain(x, depth + 1))));
+export function recordStep(step) { if (REC.on && REC.depth === 0 && REC.steps) { REC.steps.push(step); try { localStorage.setItem('sakura.actions', JSON.stringify(S.actions)); } catch (e) { /* */ } } }
+const REC_SKIP = { L: ['toggleCollapse', 'dropOn', 'reorder', 'editSmart', 'commitSmart', 'replaceSmart', 'toggleSmartFilter', 'removeSmartFilter'], EDIT: ['copy', 'cut', 'paste', 'undo', 'redo', 'defineBrushPreset'], SELECT: ['save', 'load', 'toggleQuickMask'], IMAGE: ['duplicate'] };
+for (const [ns, obj] of Object.entries({ IMAGE, L, SELECT, EDIT })) {
+  for (const k of Object.keys(obj)) {
+    if (typeof obj[k] !== 'function' || (REC_SKIP[ns] || []).includes(k)) continue;
+    const orig = obj[k];
+    obj[k] = (...args) => {
+      const a = args.filter((x) => !(x && typeof x === 'object' && (x.nativeEvent || x.target)));
+      if (REC.on && REC.depth === 0 && a.every((x) => isPlain(x))) recordStep({ ns, fn: k, args: a });
+      REC.depth++;
+      let r;
+      try { r = orig(...a); } catch (e) { REC.depth--; throw e; }
+      if (r && typeof r.then === 'function') return r.finally(() => { REC.depth--; });
+      REC.depth--;
+      return r;
+    };
+  }
+}

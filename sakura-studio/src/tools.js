@@ -7,6 +7,7 @@ import {
 import { makeCanvas, ctx2d, cloneCanvas, clamp, dist, hexToRgb, rgbToHex, alphaBounds, rgbToHsl, hslToRgb } from './engine/util.js';
 import { gcoFor, textBounds, getMerged, descendants } from './engine/doc.js';
 import { shapePath, drawLine, renderShapeLayer } from './engine/shapes.js';
+import { bilinearMap, meshMapFor } from './engine/mesh.js';
 export { shapePath };
 
 let T = null; // aktueller Zeiger-Vorgang
@@ -35,6 +36,48 @@ function selectionMode(e) {
   return S.sel.mode;
 }
 
+// ---------- Eigene Pinselspitzen (Alpha-Masken) ----------
+const tipCanvases = new Map();
+export function customTip(id) { return tipCanvases.get(id) || null; }
+export async function loadCustomTips() {
+  for (const b of S.customBrushes || []) {
+    if (tipCanvases.has(b.id)) continue;
+    const img = new Image(); img.src = b.data;
+    try { await img.decode(); const c = makeCanvas(img.width, img.height); ctx2d(c).drawImage(img, 0, 0); tipCanvases.set(b.id, c); } catch (e) { /* defekt */ }
+  }
+}
+// Graustufenbild → Pinselspitze (dunkel = deckend)
+export function makeTipFromCanvas(src, name) {
+  const b = alphaBounds(src) || { x: 0, y: 0, w: src.width, h: src.height };
+  const max = 500, k = Math.min(1, max / Math.max(b.w, b.h));
+  const c = makeCanvas(Math.max(1, b.w * k), Math.max(1, b.h * k)); const x = ctx2d(c);
+  x.drawImage(src, b.x, b.y, b.w, b.h, 0, 0, c.width, c.height);
+  const id = x.getImageData(0, 0, c.width, c.height);
+  for (let i = 0; i < id.data.length; i += 4) {
+    const l = (id.data[i] * 0.299 + id.data[i + 1] * 0.587 + id.data[i + 2] * 0.114) / 255;
+    const a = (1 - l) * id.data[i + 3];
+    id.data[i] = id.data[i + 1] = id.data[i + 2] = 0; id.data[i + 3] = a;
+  }
+  x.putImageData(id, 0, 0);
+  const tid = 'b' + Date.now().toString(36);
+  tipCanvases.set(tid, c);
+  S.customBrushes = [...(S.customBrushes || []), { id: tid, name: name || 'Eigener Pinsel', data: c.toDataURL('image/png') }];
+  try { localStorage.setItem('sakura.customBrushes', JSON.stringify(S.customBrushes)); } catch (e) { toast('Pinselspeicher voll'); }
+  Object.assign(S.brush, { shape: 'custom:' + tid, spacing: 0.25, size: Math.min(300, Math.max(c.width, c.height)) });
+  emit();
+  return tid;
+}
+export function definePresetFromSelection() {
+  const d = doc(); if (!d) return;
+  const src = cloneCanvas(getMerged(d));
+  if (d.selection) { const sx = ctx2d(src); sx.globalCompositeOperation = 'destination-in'; sx.drawImage(d.selection, 0, 0); }
+  // Transparenz → weiß (= nicht malen)
+  const flat = makeCanvas(d.w, d.h); const fx = ctx2d(flat); fx.fillStyle = '#fff'; fx.fillRect(0, 0, d.w, d.h); fx.drawImage(src, 0, 0);
+  if (d.selection) { fx.globalCompositeOperation = 'destination-in'; fx.drawImage(d.selection, 0, 0); }
+  makeTipFromCanvas(flat, 'Pinsel ' + ((S.customBrushes || []).length + 1));
+  toast('Pinselvorgabe gespeichert und ausgewählt');
+}
+
 // ---------- Pinsel-Spitze ----------
 const dabCache = new Map();
 function dabCanvas(size, hardness, color, shape = 'round', angle = 0, roundness = 1) {
@@ -46,7 +89,10 @@ function dabCanvas(size, hardness, color, shape = 'round', angle = 0, roundness 
   const x = ctx2d(c);
   const r = size / 2, cx = (s + 2) / 2;
   x.translate(cx, cx); x.rotate(angle * Math.PI / 180); x.scale(1, roundness);
-  if (shape === 'square') { x.fillStyle = color; x.fillRect(-r, -r, size, size); }
+  if (shape.startsWith && shape.startsWith('custom:')) {
+    const tip = customTip(shape.slice(7));
+    if (tip) { const k = size / Math.max(tip.width, tip.height); const tw = tip.width * k, th = tip.height * k; x.drawImage(tip, -tw / 2, -th / 2, tw, th); x.globalCompositeOperation = 'source-in'; x.fillStyle = color; x.fillRect(-r, -r, size, size); }
+  } else if (shape === 'square') { x.fillStyle = color; x.fillRect(-r, -r, size, size); }
   else if (shape === 'blossom') { drawBlossom(x, 0, 0, r, color); }
   else if (shape === 'star') { x.fillStyle = color; drawStarPath(x, 0, 0, 5, r, r * 0.45); x.fill(); }
   else {
@@ -397,6 +443,37 @@ export function tracePath(x, path) {
   if (path.closed && pts.length > 2) { seg(pts[pts.length - 1], pts[0]); x.closePath(); }
 }
 
+// Pfad in Polylinie umwandeln (für Text auf Pfad)
+export function pathPolyline(path, steps = 24) {
+  const pts = path.points; if (!pts.length) return [];
+  const out = [{ x: pts[0].x, y: pts[0].y }];
+  const seg = (a, b) => {
+    const c1 = { x: a.ox ?? a.x, y: a.oy ?? a.y }, c2 = { x: b.ix ?? b.x, y: b.iy ?? b.y };
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps, u = 1 - t;
+      out.push({ x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x, y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y });
+    }
+  };
+  for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i]);
+  if (path.closed && pts.length > 2) seg(pts[pts.length - 1], pts[0]);
+  return out;
+}
+
+export function textOnPath() {
+  const d = doc(); if (!d) return;
+  const path = d.paths[d.activePath] || d.paths[d.paths.length - 1];
+  if (!path || path.points.length < 2) { toast('Zeichne zuerst mit dem Zeichenstift (P) einen Pfad'); return; }
+  const poly = pathPolyline(path);
+  const l = new Layer(d.w, d.h, 'Text auf Pfad');
+  l.type = 'text';
+  l.text = { content: 'Text auf Pfad', x: poly[0].x, y: poly[0].y - S.text.size, font: S.text.font, size: S.text.size, color: S.text.color || S.fg, bold: S.text.bold, italic: S.text.italic, caps: S.text.caps, align: 'left', leading: 1.2, tracking: S.text.tracking || 0, path: poly, pathOffset: 0 };
+  renderTextLayer(l, d.w, d.h);
+  d.addLayer(l);
+  S.tool = 'type';
+  S.ui.textEdit = { layerId: l.id, isNew: true };
+  emit(); view.request();
+}
+
 export const PATHS = {
   toSelection: () => {
     const d = doc(); const p = d && d.paths[d.activePath]; if (!p) { toast('Kein Pfad aktiv'); return; }
@@ -664,8 +741,12 @@ export function pointerUp(e) {
       if (t.object) {
         // Objektauswahl: Motiv innerhalb des Rechtecks
         const src = mergedCanvas(d); const part = makeCanvas(r.w, r.h); ctx2d(part).drawImage(src, -r.x, -r.y);
-        const m = SEL.selectSubject(part); const c = makeCanvas(d.w, d.h); ctx2d(c).drawImage(m, r.x, r.y);
-        SEL.combine(d, c, t.mode); commit('Objektauswahl'); break;
+        S.ui.busy = 'KI-Objektauswahl'; emit();
+        import('./engine/ai.js').then((ai) => ai.aiSubjectMask(part, S.prefs.aiModel)).catch(() => SEL.selectSubject(part)).then((m) => {
+          const c = makeCanvas(d.w, d.h); ctx2d(c).drawImage(m, r.x, r.y);
+          SEL.combine(d, c, t.mode); S.ui.busy = null; commit('Objektauswahl');
+        });
+        break;
       }
       const ell = S.sub.marquee === 'ellipse';
       const c = SEL.shapeCanvas(d, (x) => { if (ell) { x.beginPath(); x.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2); x.fill(); } else x.fillRect(Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h)); }, S.sel.feather);
@@ -927,6 +1008,22 @@ function shiftT(t, dx, dy) {
   return n;
 }
 
+// Bildschirmpunkt → unverformte Position (für neue Pins): Suche im Gitter
+function meshInverse(t, p) {
+  const base = bilinearMap(t.corners);
+  const f = meshMapFor(t);
+  let best = null, bd = Infinity;
+  const N = 40;
+  for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+    const q = f(i / N, j / N); const dd = (q.x - p.x) ** 2 + (q.y - p.y) ** 2;
+    if (dd < bd) { bd = dd; best = [i / N, j / N]; }
+  }
+  if (!best) return null;
+  const cell = Math.hypot(t.w * t.sx, t.h * t.sy) / N;
+  if (Math.sqrt(bd) > cell * 2) return null;
+  return base(best[0], best[1]);
+}
+
 export function meshPoints(t) {
   if (!t || !t.mesh) return [];
   if (t.mesh === 'warp') { const out = []; t.grid.forEach((r, j) => r.forEach((q, i) => out.push({ ...q, j, i }))); return out; }
@@ -935,6 +1032,17 @@ export function meshPoints(t) {
 
 function transformDown(e) {
   const t = S.transform; const p = e.p;
+  if (t.mesh === 'puppet') {
+    const tol = 10 / e.zoom;
+    const idx = (t.pins || []).findIndex((pn) => dist(pn.q, p) < tol);
+    if (idx >= 0 && e.alt) { t.pins.splice(idx, 1); renderTransform(); emit(); return; }
+    if (idx >= 0) { T = { kind: 'transform', mode: 'pin', idx, a: p, q0: { ...t.pins[idx].q } }; return; }
+    // neuen Pin an der ursprünglichen (unverformten) Position setzen
+    const inv = meshInverse(t, p);
+    if (!inv) { toast('Pins nur innerhalb des Motivs setzen'); return; }
+    t.pins.push({ p: inv, q: { x: p.x, y: p.y } });
+    renderTransform(); emit(); return;
+  }
   if (t.mesh) {
     const tol = 9 / e.zoom;
     const hit = meshPoints(t).find((q) => dist(q, p) < tol);
@@ -954,6 +1062,11 @@ function transformDown(e) {
 
 function transformDrag(e) {
   const t = S.transform; const s = T.start; const p = e.p;
+  if (T.mode === 'pin') {
+    const pin = t.pins[T.idx]; if (!pin) return;
+    pin.q = { x: T.q0.x + p.x - T.a.x, y: T.q0.y + p.y - T.a.y };
+    renderTransform(); emit(); return;
+  }
   if (T.mode === 'meshpt' || T.mode === 'meshmove') {
     const dx = p.x - T.a.x, dy = p.y - T.a.y;
     if (T.mode === 'meshmove') {

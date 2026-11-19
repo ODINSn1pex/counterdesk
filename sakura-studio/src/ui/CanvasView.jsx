@@ -3,7 +3,7 @@ import { S, doc, view, emit, emitCursor, useStore, openBytes, placeImage, VIEW, 
 import { composite } from '../engine/doc.js';
 import { makeCanvas, ctx2d, loadImage } from '../engine/util.js';
 import { edgeCanvas } from '../engine/selection.js';
-import { warpMap as warpMapUI } from '../engine/mesh.js';
+import { warpMap as warpMapUI, meshMapFor as meshMapForUI } from '../engine/mesh.js';
 import * as TL from '../tools.js';
 import { TextEditor } from './TextEditor.jsx';
 
@@ -46,6 +46,38 @@ function checker(x) {
 }
 
 const ease = (t) => 1 - Math.pow(1 - t, 3);
+
+// CMYK-Proof (Näherung ohne ICC-Profil): sehr gesättigte, helle RGB-Farben liegen außerhalb des Druckfarbraums
+function gamutExcess(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), v = mx / 255, sat = mx ? (mx - mn) / mx : 0;
+  if (sat < 0.3) return 0;
+  let h = 0; const d = mx - mn;
+  if (d) { if (mx === r) h = ((g - b) / d + 6) % 6; else if (mx === g) h = (b - r) / d + 2; else h = (r - g) / d + 4; }
+  h *= 60;
+  const lim = [[0, 0.72], [30, 0.8], [60, 0.88], [120, 0.58], [180, 0.62], [220, 0.5], [270, 0.52], [320, 0.66], [360, 0.72]];
+  let L = 0.7;
+  for (let i = 1; i < lim.length; i++) if (h <= lim[i][0]) { const t = (h - lim[i - 1][0]) / (lim[i][0] - lim[i - 1][0]); L = lim[i - 1][1] + (lim[i][1] - lim[i - 1][1]) * t; break; }
+  return Math.max(0, sat * v - L);
+}
+function proofCanvas(src, proof, gamut, reuse) {
+  const c = reuse && reuse.width === src.width && reuse.height === src.height ? reuse : makeCanvas(src.width, src.height);
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.clearRect(0, 0, c.width, c.height); x.drawImage(src, 0, 0);
+  const id = x.getImageData(0, 0, c.width, c.height), p = id.data;
+  for (let i = 0; i < p.length; i += 4) {
+    let r = p[i], g = p[i + 1], b = p[i + 2];
+    const ex = gamutExcess(r, g, b);
+    if (gamut && ex > 0.03) { p[i] = p[i + 1] = p[i + 2] = 128; continue; }
+    if (proof) {
+      const k = Math.min(1, ex * 2.2), l = r * 0.299 + g * 0.587 + b * 0.114;
+      r += (l - r) * k * 0.55; g += (l - g) * k * 0.55; b += (l - b) * k * 0.55;
+      // Papierweiß & Tiefschwarz eines gestrichenen Papiers
+      p[i] = 22 + r * 0.9; p[i + 1] = 20 + g * 0.9; p[i + 2] = 24 + b * 0.89;
+    }
+  }
+  x.putImageData(id, 0, 0);
+  return c;
+}
 
 export function CanvasView() {
   useStore();
@@ -146,7 +178,13 @@ export function CanvasView() {
     x.fillStyle = checker(x); x.translate(g.ox, g.oy); x.fillRect(0, 0, dw, dh); x.translate(-g.ox, -g.oy);
     x.imageSmoothingEnabled = g.z < 2;
     x.imageSmoothingQuality = g.z < 0.5 ? 'medium' : 'high';
-    x.drawImage(st.comp, g.ox, g.oy, dw, dh);
+    let shown = st.comp;
+    if (S.ui.proof || S.ui.gamut) {
+      const key = view.compRev + ':' + !!S.ui.proof + ':' + !!S.ui.gamut;
+      if (st.proofKey !== key) { st.proof = proofCanvas(st.comp, S.ui.proof, S.ui.gamut, st.proof); st.proofKey = key; }
+      shown = st.proof;
+    }
+    x.drawImage(shown, g.ox, g.oy, dw, dh);
 
     if (S.ui.quickMask && dd.selection) {
       if (!st.qm || st.qmRev !== dd.selRev || st.qm.width !== dd.w || st.qm.height !== dd.h) {
@@ -255,7 +293,14 @@ export function CanvasView() {
       const t = S.transform;
       x.save(); x.strokeStyle = col.accent; x.lineWidth = 1;
       const P = (q) => [g.ox + q.x * g.z, g.oy + q.y * g.z];
-      if (t.mesh === 'warp') {
+      if (t.mesh === 'puppet') {
+        const m = meshMapForUI(t);
+        x.globalAlpha = 0.35; x.beginPath();
+        const N = 12;
+        for (let k = 0; k <= N; k++) { for (let s2 = 0; s2 <= N; s2++) { const q = m(k / N, s2 / N); s2 ? x.lineTo(...P(q)) : x.moveTo(...P(q)); } for (let s2 = 0; s2 <= N; s2++) { const q = m(s2 / N, k / N); s2 ? x.lineTo(...P(q)) : x.moveTo(...P(q)); } }
+        x.stroke(); x.globalAlpha = 1;
+        (t.pins || []).forEach((pn) => { const [sx, sy] = P(pn.q); x.fillStyle = '#ffde59'; x.strokeStyle = '#000'; x.beginPath(); x.arc(sx, sy, 6, 0, 7); x.fill(); x.stroke(); x.fillStyle = '#000'; x.beginPath(); x.arc(sx, sy, 2, 0, 7); x.fill(); });
+      } else if (t.mesh === 'warp') {
         // Hüllkurve des Verformungsfeldes + Kontrollgitter
         const m = warpMapUI(t.grid);
         x.globalAlpha = 0.9; x.beginPath();
@@ -428,6 +473,7 @@ export function CanvasView() {
       )}
       {d && d.layer && d.layer.editMask && <div className="mask-badge">Maske wird bearbeitet</div>}
       {S.ui.quickMask && <div className="mask-badge qm">Maskierungsmodus (Q)</div>}
+      {(S.ui.proof || S.ui.gamut) && <div className="mask-badge proof">{S.ui.proof ? 'Proof: CMYK (Näherung)' : ''}{S.ui.proof && S.ui.gamut ? ' · ' : ''}{S.ui.gamut ? 'Farbumfang-Warnung' : ''}</div>}
       {S.ui.busy && <div className="busy-badge"><span className="spin" /> {S.ui.busy} …</div>}
     </div>
   );

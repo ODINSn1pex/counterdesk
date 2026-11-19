@@ -1,5 +1,6 @@
 // Sakura Studio – Electron Hauptprozess
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, protocol, net } = require('electron');
+const { pathToFileURL } = require('url');
 const path = require('path');
 const fs = require('fs');
 
@@ -10,6 +11,28 @@ const mainSettings = readSettings();
 if (mainSettings.hardwareAcceleration === false) app.disableHardwareAcceleration();
 const recoveryDir = () => { const d = path.join(app.getPath('userData'), 'recovery'); fs.mkdirSync(d, { recursive: true }); return d; };
 const safeName = (n) => String(n).replace(/[^a-zA-Z0-9._-]/g, '_');
+
+// Eigenes Protokoll app:// – ermöglicht Fetch, Web Worker und Multithreading (Cross-Origin-Isolation) für die KI
+protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
+const distDir = path.join(__dirname, '..', 'dist');
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.png': 'image/png', '.jpg': 'image/jpeg', '.onnx': 'application/octet-stream', '.json': 'application/json', '.svg': 'image/svg+xml' };
+function registerAppProtocol() {
+  protocol.handle('app', async (req) => {
+    const u = new URL(req.url);
+    const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html';
+    const file = path.normalize(path.join(distDir, rel));
+    if (!file.startsWith(distDir)) return new Response('Verboten', { status: 403 });
+    try {
+      const res = await net.fetch(pathToFileURL(file).toString());
+      const headers = new Headers();
+      headers.set('Content-Type', MIME[path.extname(file).toLowerCase()] || 'application/octet-stream');
+      headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+      headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+      headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+      return new Response(res.body, { status: res.status, headers });
+    } catch (e) { return new Response('Nicht gefunden', { status: 404 }); }
+  });
+}
 
 let win = null;
 let allowClose = false;
@@ -41,7 +64,7 @@ function createWindow() {
       backgroundThrottling: false,
     },
   });
-  win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  win.loadURL('app://bundle/index.html');
   win.once('ready-to-show', () => { win.maximize(); win.show(); });
   win.on('maximize', () => win.webContents.send('win-state', true));
   win.on('unmaximize', () => win.webContents.send('win-state', false));
@@ -66,7 +89,7 @@ if (!gotLock) {
       if (f) win.webContents.send('open-path', f);
     }
   });
-  app.whenReady().then(() => { workFolder(); createWindow(); });
+  app.whenReady().then(() => { registerAppProtocol(); workFolder(); createWindow(); });
   app.on('window-all-closed', () => app.quit());
 }
 
@@ -137,6 +160,39 @@ ipcMain.handle('set-main-setting', (_e, key, value) => {
   const cur = readSettings(); cur[key] = value;
   fs.writeFileSync(settingsFile(), JSON.stringify(cur, null, 2));
   return true;
+});
+
+// Zusätzliche KI-Modelle im Benutzerordner
+const modelsDir = () => { const d = path.join(app.getPath('userData'), 'models'); fs.mkdirSync(d, { recursive: true }); return d; };
+ipcMain.handle('ai-model-read', (_e, file) => {
+  const p = path.join(modelsDir(), path.basename(file));
+  if (fs.existsSync(p)) return fs.readFileSync(p);
+  return null;
+});
+ipcMain.handle('ai-model-exists', (_e, file) => fs.existsSync(path.join(modelsDir(), path.basename(file))) || fs.existsSync(path.join(distDir, 'models', path.basename(file))));
+ipcMain.handle('ai-model-download', async (e, file, url) => {
+  const dest = path.join(modelsDir(), path.basename(file));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Download fehlgeschlagen (' + res.status + ')');
+  const total = Number(res.headers.get('content-length')) || 0;
+  const tmp = dest + '.part';
+  const out = fs.createWriteStream(tmp);
+  let got = 0, last = 0;
+  for await (const chunk of res.body) {
+    out.write(Buffer.from(chunk)); got += chunk.length;
+    const now = Date.now();
+    if (now - last > 250) { last = now; e.sender.send('ai-progress', { file, got, total }); }
+  }
+  await new Promise((r) => out.end(r));
+  fs.renameSync(tmp, dest);
+  e.sender.send('ai-progress', { file, got, total, done: true });
+  return true;
+});
+
+ipcMain.handle('list-dir', (_e, dir) => {
+  try {
+    return fs.readdirSync(dir).filter((f) => /\.(png|jpe?g|webp|gif|bmp|psd|sakura|tiff?)$/i.test(f)).map((f) => ({ name: f, path: path.join(dir, f) }));
+  } catch (e) { return []; }
 });
 
 ipcMain.handle('show-in-folder', (_e, p) => shell.showItemInFolder(p));

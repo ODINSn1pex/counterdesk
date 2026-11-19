@@ -94,6 +94,7 @@ const P = {
   row: 'M3 11h18v2H3z',
   col: 'M11 3h2v18h-2z',
   clipboard: 'M9 2h6v4H9zM7 4H5v18h14V4h-2',
+  play: 'M7 4l13 8-13 8z',
 };
 
 export function Icon({ name, size = 18, stroke = 1.6, className = '', style }) {

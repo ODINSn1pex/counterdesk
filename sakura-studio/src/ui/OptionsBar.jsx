@@ -91,6 +91,14 @@ function BrushPicker({ o }) {
             <Num label="Abstand:" value={Math.round(o.spacing * 100)} min={1} max={300} onChange={(v) => { o.spacing = v / 100; emit(); }} unit="%" />
             <Num label="Streuung:" value={Math.round(o.scatter * 100)} min={0} max={200} onChange={(v) => { o.scatter = v / 100; emit(); }} unit="%" />
             <Num label="Größen-Jitter:" value={Math.round(o.jitter * 100)} min={0} max={100} onChange={(v) => { o.jitter = v / 100; emit(); }} unit="%" />
+            {(S.customBrushes || []).length > 0 && <div className="brush-presets">
+              {S.customBrushes.map((b) => (
+                <button key={b.id} title={b.name + ' (Rechtsklick: löschen)'} className={'tipbtn' + (o.shape === 'custom:' + b.id ? ' on' : '')} onClick={() => { o.shape = 'custom:' + b.id; o.spacing = Math.max(o.spacing, 0.25); emit(); }}
+                  onContextMenu={(e) => { e.preventDefault(); S.customBrushes = S.customBrushes.filter((x) => x.id !== b.id); try { localStorage.setItem('sakura.customBrushes', JSON.stringify(S.customBrushes)); } catch (er) { /* */ } if (o.shape === 'custom:' + b.id) o.shape = 'round'; emit(); }}>
+                  <img src={b.data} alt="" />
+                </button>
+              ))}
+            </div>}
             <div className="brush-presets">
               {[['round', 'Rund'], ['square', 'Quadrat'], ['blossom', 'Blüte'], ['star', 'Stern']].map(([k, n]) => (
                 <button key={k} className={o.shape === k ? 'on' : ''} onClick={() => { o.shape = k; if (k !== 'round') { o.spacing = Math.max(o.spacing, 0.9); } emit(); }}>{n}</button>
@@ -127,13 +135,13 @@ export function OptionsBar() {
       const tr = S.transform;
       const upd = (k, f) => (v) => { tr[k] = f ? f(v) : v; renderTransform(); emit(); };
       const modes = <div className="seg" title="Transformationsmodus">
-        {[['free', 'Frei'], ['distort', 'Verzerren'], ['perspective', 'Perspektive'], ['warp', 'Verformen']].map(([k, n]) => (
+        {[['free', 'Frei'], ['distort', 'Verzerren'], ['perspective', 'Perspektive'], ['warp', 'Verformen'], ['puppet', 'Formgitter']].map(([k, n]) => (
           <button key={k} className={(tr.mesh || 'free') === k ? 'on' : ''} onClick={() => import('../state.js').then((m) => m.setTransformMode(k))}>{n}</button>
         ))}
       </div>;
       if (tr.mesh) body = <>
         {modes}
-        <span className="hint">{tr.mesh === 'warp' ? 'Gitterpunkte & Griffe ziehen · in die Fläche klicken = verschieben' : tr.mesh === 'perspective' ? 'Ecken ziehen · Umschalt = symmetrisch' : 'Ecken frei ziehen'}</span>
+        <span className="hint">{tr.mesh === 'puppet' ? `${(tr.pins || []).length} Pins · Klick = Pin setzen · Ziehen = verbiegen · Alt+Klick = Pin löschen` : tr.mesh === 'warp' ? 'Gitterpunkte & Griffe ziehen · in die Fläche klicken = verschieben' : tr.mesh === 'perspective' ? 'Ecken ziehen · Umschalt = symmetrisch' : 'Ecken frei ziehen'}</span>
         <div className="opt-sep" />
         <button className="btn" onClick={cancelTransform} title="Abbrechen (Esc)">⊘</button>
         <button className="btn primary" onClick={applyTransform} title="Bestätigen (Enter)"><Icon name="check" size={14} /></button>

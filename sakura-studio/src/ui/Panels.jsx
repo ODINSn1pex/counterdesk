@@ -3,6 +3,8 @@ import { S, emit, useStore, useCursor, doc, view, commit, setFg, setBg, L, SELEC
 import { ADJUSTMENTS, FILTERS } from '../engine/filters.js';
 import { childrenOf, descendants, effectiveVisible } from '../engine/doc.js';
 import { ParamRow, CurvesEditor, LevelsHisto } from './Dialogs.jsx';
+import { playAction, saveActions, startRecording, stopRecording, stepLabel } from '../actions.js';
+import { REC } from '../state.js';
 import { fmtUnit } from './CanvasView.jsx';
 import { BLEND_MODES } from '../engine/doc.js';
 import { makeCanvas, ctx2d, hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '../engine/util.js';
@@ -545,7 +547,7 @@ function PathsPanel() {
 // ---------------- Seitenleiste (Protokoll, Navigator, Info …) ----------------
 export function SideStrip() {
   useStore();
-  const items = [['history', 'history', 'Protokoll'], ['navigator', 'navigator', 'Navigator'], ['info', 'info', 'Info'], ['brushes', 'brushes', 'Pinsel'], ['character', 'character', 'Zeichen'], ['paragraph', 'paragraph', 'Absatz']];
+  const items = [['history', 'history', 'Protokoll'], ['actions', 'play', 'Aktionen'], ['navigator', 'navigator', 'Navigator'], ['info', 'info', 'Info'], ['brushes', 'brushes', 'Pinsel'], ['character', 'character', 'Zeichen'], ['paragraph', 'paragraph', 'Absatz']];
   return (
     <div className="side-strip" data-tut="side">
       <div className="tb-grip" />
@@ -560,18 +562,58 @@ export function Flyout() {
   useStore();
   const f = S.ui.flyout;
   if (!f) return null;
-  const title = { history: 'Protokoll', navigator: 'Navigator', info: 'Info', brushes: 'Pinsel', character: 'Zeichen', paragraph: 'Absatz' }[f];
+  const title = { history: 'Protokoll', actions: 'Aktionen', navigator: 'Navigator', info: 'Info', brushes: 'Pinsel', character: 'Zeichen', paragraph: 'Absatz' }[f];
   return (
     <div className="flyout">
       <div className="panel-tabs"><button className="on">{title}</button><div className="flex" /><button className="panel-menu" onClick={() => { S.ui.flyout = null; emit(); }}><Icon name="close" size={13} /></button></div>
       <div className="panel-body">
         {f === 'history' && <HistoryPanel />}
+        {f === 'actions' && <ActionsPanel />}
         {f === 'navigator' && <NavigatorPanel />}
         {f === 'info' && <InfoPanel />}
         {f === 'brushes' && <BrushesPanel />}
         {f === 'character' && <CharacterPanel />}
         {f === 'paragraph' && <ParagraphPanel />}
       </div>
+    </div>
+  );
+}
+
+function ActionsPanel() {
+  useStore();
+  const [open, setOpen] = useState(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const rec = REC.on;
+  return (
+    <div className="actions">
+      {S.actions.map((a, i) => (
+        <div key={i} className={'act' + (REC.action === a ? ' rec' : '')}>
+          <div className="act-row">
+            <button className="twisty-btn" onClick={() => setOpen(open === i ? null : i)}><Icon name="chevron" size={12} style={{ transform: open === i ? 'none' : 'rotate(-90deg)' }} /></button>
+            <span className="lname">{a.name}</span><span className="muted">{a.steps.length}</span>
+            <button className="icon-btn small" title="Abspielen" disabled={busy || rec} onClick={async () => { setBusy(true); await playAction(a); setBusy(false); }}><Icon name="play" size={14} /></button>
+            <button className="icon-btn small" title="Aktion löschen" onClick={() => { S.actions.splice(i, 1); saveActions(); }}><Icon name="trash" size={13} /></button>
+          </div>
+          {open === i && <div className="act-steps">
+            {a.steps.map((st, j) => (
+              <div key={j} className={'act-step' + (st.off ? ' off' : '')}>
+                <input type="checkbox" checked={!st.off} onChange={() => { st.off = !st.off; saveActions(); }} />
+                <span>{stepLabel(st)}</span>
+                <button className="icon-btn small" title="Schritt löschen" onClick={() => { a.steps.splice(j, 1); saveActions(); }}><Icon name="close" size={11} /></button>
+              </div>
+            ))}
+            {!a.steps.length && <div className="hint">Noch keine Schritte</div>}
+          </div>}
+        </div>
+      ))}
+      <div className="act-foot">
+        {rec
+          ? <button className="btn small rec-btn" onClick={stopRecording}>■ Aufnahme beenden ({(REC.steps || []).length})</button>
+          : <><input className="path-in" placeholder="Name der neuen Aktion" value={name} onChange={(e) => setName(e.target.value)} /><button className="btn small" onClick={() => { startRecording(name.trim()); setName(''); }}>● Aufnehmen</button></>}
+      </div>
+      <button className="btn small" disabled={!window.native} title={window.native ? '' : 'Nur in der Desktop-App'} onClick={() => openDialog('batch')}>Stapelverarbeitung…</button>
+      <div className="hint">Aufgezeichnet werden Menübefehle, Filter, Korrekturen, Ebenen- und Auswahlbefehle (keine Pinselstriche).</div>
     </div>
   );
 }

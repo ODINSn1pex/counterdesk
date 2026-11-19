@@ -242,6 +242,7 @@ export function renderTextLayer(layer, w, h) {
   if (layer.canvas.width !== w || layer.canvas.height !== h) { layer.canvas.width = w; layer.canvas.height = h; }
   const x = layer.ctx;
   x.clearRect(0, 0, w, h);
+  if (t.path && t.path.length > 1) { renderTextOnPath(x, t); layer.touch(); return; }
   x.save();
   x.fillStyle = t.color;
   x.textBaseline = 'top';
@@ -272,8 +273,51 @@ export function renderTextLayer(layer, w, h) {
   layer.touch();
 }
 
+// Text entlang einer Polylinie (Text auf Pfad)
+function renderTextOnPath(x, t) {
+  const pts = t.path;
+  const segs = []; let total = 0;
+  for (let i = 1; i < pts.length; i++) { const l = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y); segs.push(l); total += l; }
+  const at = (s) => {
+    let acc = 0;
+    for (let i = 0; i < segs.length; i++) {
+      if (acc + segs[i] >= s || i === segs.length - 1) {
+        const k = segs[i] ? Math.min(1, Math.max(0, (s - acc) / segs[i])) : 0;
+        const a = pts[i], b = pts[i + 1];
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, ang: Math.atan2(b.y - a.y, b.x - a.x) };
+      }
+      acc += segs[i];
+    }
+    return { x: pts[0].x, y: pts[0].y, ang: 0 };
+  };
+  x.save();
+  x.fillStyle = t.color;
+  x.font = `${t.italic ? 'italic ' : ''}${t.bold ? '700 ' : '400 '}${t.size}px "${t.font}"`;
+  x.textBaseline = 'alphabetic';
+  let str = (t.content || '').replace(/\n/g, ' ');
+  if (t.caps) str = str.toUpperCase();
+  const tr = t.tracking || 0;
+  const widths = [...str].map((ch) => x.measureText(ch).width + tr);
+  const tw = widths.reduce((a, b) => a + b, 0);
+  let s = (t.pathOffset || 0) + (t.align === 'center' ? (total - tw) / 2 : t.align === 'right' ? total - tw : 0);
+  [...str].forEach((ch, i) => {
+    const mid = s + widths[i] / 2;
+    if (mid >= 0 && mid <= total) {
+      const p = at(mid);
+      x.save(); x.translate(p.x, p.y); x.rotate(p.ang); x.fillText(ch, -widths[i] / 2 + tr / 2, -(t.baselineShift || 0)); x.restore();
+    }
+    s += widths[i];
+  });
+  x.restore();
+}
+
 export function textBounds(layer) {
   const t = layer.text;
+  if (t.path && t.path.length > 1) {
+    const xs = t.path.map((p) => p.x), ys = t.path.map((p) => p.y);
+    const x0 = Math.min(...xs) - t.size, y0 = Math.min(...ys) - t.size;
+    return { x: x0, y: y0, w: Math.max(...xs) - x0 + t.size, h: Math.max(...ys) - y0 + t.size };
+  }
   const c = makeCanvas(1, 1).getContext('2d');
   c.font = `${t.italic ? 'italic ' : ''}${t.bold ? '700 ' : '400 '}${t.size}px "${t.font}"`;
   const lines = (t.content || ' ').split('\n');

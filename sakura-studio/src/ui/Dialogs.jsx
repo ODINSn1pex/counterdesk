@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { S, emit, useStore, doc, view, commit, closeDialog, newDocument, IMAGE, EDIT, SELECT, VIEW, exportImage, closeDoc, savePrefs, saveSwatches, setFg, setBg, saveProject, DEFAULT_PREFS, ACCENTS, resetToolOptions, restoreRecovery, L, toast } from '../state.js';
 import { feather as selFeather, expand as selExpand, contract as selContract, smooth as selSmooth } from '../engine/selection.js';
 import { cloneCanvas } from '../engine/util.js';
+import { LiquifyDialog } from './dialogs/Liquify.jsx';
 import { ADJUSTMENTS, FILTERS, histogram, curveLut } from '../engine/filters.js';
 import { BLEND_MODES } from '../engine/doc.js';
 import { beginPreview, previewFilter, showOriginal, finishFilter, cancelPreview } from './dialogs/applyFilter.js';
@@ -54,7 +55,7 @@ export function Dialogs() {
     new: NewDocDialog, filter: FilterDialog, imageSize: ImageSizeDialog, canvasSize: CanvasSizeDialog, fill: FillDialog, stroke: StrokeDialog,
     export: ExportDialog, modifySel: ModifySelDialog, colorRange: ColorRangeDialog, layerStyle: LayerStyleDialog, colorPicker: ColorPickerDialog,
     shortcuts: ShortcutsDialog, prefs: PrefsDialog, about: AboutDialog, confirmClose: ConfirmCloseDialog, guide: GuideDialog, histogram: HistogramDialog,
-    gradientEditor: GradientEditorDialog, features: FeaturesDialog, appClose: AppCloseDialog, selectMask: SelectMaskDialog, recovery: RecoveryDialog,
+    gradientEditor: GradientEditorDialog, features: FeaturesDialog, appClose: AppCloseDialog, selectMask: SelectMaskDialog, recovery: RecoveryDialog, liquify: LiquifyDialog, batch: BatchDialog,
   }[dg.type];
   return C ? <C dg={dg} key={dg.type + (dg.id || '') + (dg.tab || '')} /> : null;
 }
@@ -443,6 +444,41 @@ function ShortcutsDialog() {
   );
 }
 
+function AiModelPicker() {
+  useStore();
+  const [exists, setExists] = useState({});
+  const [prog, setProg] = useState(null);
+  const [AI, setAI] = useState(null);
+  useEffect(() => {
+    import('../engine/ai.js').then(async (m) => {
+      setAI(m.AI_MODELS);
+      const ex = {};
+      for (const [k, v] of Object.entries(m.AI_MODELS)) ex[k] = v.url ? (window.native && window.native.aiModelExists ? await window.native.aiModelExists(v.file) : false) : true;
+      setExists(ex);
+    });
+    if (window.native) window.native.on('ai-progress', (pp) => setProg(pp.done ? null : pp));
+  }, []);
+  if (!AI) return null;
+  const download = async (k) => {
+    if (!window.native) { toast('Download nur in der Desktop-App'); return; }
+    try { setProg({ got: 0, total: AI[k].mb * 1048576 }); await window.native.aiModelDownload(AI[k].file, AI[k].url); setExists((e) => ({ ...e, [k]: true })); S.prefs.aiModel = k; savePrefs(); toast('KI-Modell installiert'); }
+    catch (e) { toast('Download fehlgeschlagen: ' + e.message); }
+    setProg(null);
+  };
+  return (
+    <div className="col" style={{ width: '100%' }}>
+      {Object.entries(AI).map(([k, v]) => (
+        <label key={k} className="chk">
+          <input type="radio" name="aimodel" disabled={!exists[k]} checked={S.prefs.aiModel === k} onChange={() => { S.prefs.aiModel = k; savePrefs(); }} />
+          <span>{v.label} · {v.mb} MB</span>
+          {!exists[k] && v.url && <button className="btn small" disabled={!!prog} onClick={() => download(k)}>Herunterladen</button>}
+        </label>
+      ))}
+      {prog && <div className="hint">Lade herunter … {Math.round(prog.got / 1048576)} / {Math.round((prog.total || 1) / 1048576)} MB</div>}
+    </div>
+  );
+}
+
 function Row({ label, children, hint }) { return <div className="pref-row"><span className="pref-label">{label}</span><div className="pref-ctl">{children}{hint && <div className="hint">{hint}</div>}</div></div>; }
 
 const PREF_CATS = [['general', 'Allgemein'], ['ui', 'Benutzeroberfläche'], ['tools', 'Werkzeuge'], ['perf', 'Leistung'], ['grid', 'Transparenz & Raster'], ['units', 'Einheiten & Lineale'], ['files', 'Dateien'], ['reset', 'Zurücksetzen']];
@@ -502,6 +538,9 @@ function PrefsDialog({ dg }) {
             <h4>Leistung</h4>
             <Row label="Filtervorschau" hint="Bei großen Bildern wird die Vorschau verkleinert berechnet – das Ergebnis wird immer in voller Auflösung angewendet."><Check label="Schnelle Vorschau bei großen Bildern" value={p.fastPreview} onChange={set('fastPreview')} /></Row>
             <Row label="Grafikprozessor" hint="Änderung wird nach einem Neustart wirksam. Nur bei Darstellungsfehlern deaktivieren."><Check label="Hardwarebeschleunigung verwenden" value={p.hardwareAcceleration} onChange={(v) => { set('hardwareAcceleration')(v); if (window.native && window.native.setMainSetting) window.native.setMainSetting('hardwareAcceleration', v); }} /></Row>
+            <Row label="KI-Freistellung" hint="Für „Motiv auswählen“, „Objektauswahl“ und „Hintergrund entfernen“. Läuft komplett lokal auf deinem PC.">
+              <AiModelPicker />
+            </Row>
             <Row label="Protokoll" hint="Weniger Schritte = weniger Arbeitsspeicher."><Num value={p.historyStates} min={5} max={300} onChange={set('historyStates')} width={60} /></Row>
           </>}
           {cat === 'grid' && <>
@@ -574,6 +613,31 @@ function SelectMaskDialog() {
   );
 }
 
+// ---------------- Stapelverarbeitung ----------------
+function BatchDialog() {
+  const [ai, setAi] = useState(0), [inDir, setIn] = useState(''), [outDir, setOut] = useState(''), [fmt, setFmt] = useState('jpeg'), [q, setQ] = useState(90);
+  const [prog, setProg] = useState(null), [result, setResult] = useState(null);
+  const pick = async (set) => { const d = await window.native.chooseFolder({ title: 'Ordner wählen' }); if (d) set(d); };
+  const run = async () => {
+    if (!inDir || !outDir) { toast('Bitte Quell- und Zielordner wählen'); return; }
+    const { runBatch } = await import('../actions.js');
+    setResult(null);
+    const r = await runBatch({ action: S.actions[ai], inDir, outDir, format: fmt, quality: q / 100, onProgress: (i, n, f) => setProg({ i, n, f }) });
+    setProg(null); setResult(r);
+  };
+  return (
+    <Modal title="Stapelverarbeitung" onCancel={closeDialog} onOk={prog ? null : run} okLabel="Starten" width={520}>
+      <label className="prow"><span>Aktion</span><Sel value={String(ai)} onChange={(v) => setAi(Number(v))} options={S.actions.map((a, i) => [String(i), a.name])} width={240} /></label>
+      <div className="prow"><span>Quellordner</span><input className="path-in" readOnly value={inDir} /><button className="btn small" onClick={() => pick(setIn)}>Wählen…</button></div>
+      <div className="prow"><span>Zielordner</span><input className="path-in" readOnly value={outDir} /><button className="btn small" onClick={() => pick(setOut)}>Wählen…</button></div>
+      <label className="prow"><span>Format</span><Sel value={fmt} onChange={setFmt} options={[['jpeg', 'JPG'], ['png', 'PNG'], ['webp', 'WebP']]} width={120} /></label>
+      {fmt !== 'png' && <Num label="Qualität" value={q} min={1} max={100} onChange={setQ} unit="%" />}
+      {prog && <div className="hint">Bearbeite {prog.i} / {prog.n}: {prog.f}</div>}
+      {result && <div className="hint">Fertig: {result.ok} von {result.total} Dateien gespeichert.</div>}
+    </Modal>
+  );
+}
+
 // ---------------- Wiederherstellung ----------------
 function RecoveryDialog({ dg }) {
   const items = dg.items || [];
@@ -592,13 +656,13 @@ function AboutDialog() {
       <div className="about">
         <Logo size={64} />
         <h2>Sakura Studio</h2>
-        <div>Version 1.1.0 · Bildbearbeitung für Windows</div>
+        <div>Version 2.0.0 · Bildbearbeitung für Windows</div>
         <p>Ebenen, Masken, Auswahlen, Pinsel, Retusche, Text, Formen, Pfade, über 50 Korrekturen & Filter, PSD-Import/-Export und mehr.</p>
         <p className="muted">Arbeitsordner: Desktop\Sakura Studio\Projekte · Einstellungen: Bearbeiten › Voreinstellungen (Strg+K)</p>
         <details className="licenses"><summary>Open-Source-Komponenten</summary>
           <ul>
             <li>Electron – MIT-Lizenz</li><li>Chromium – BSD-Lizenz u. a. (siehe LICENSES.chromium.html im Programmordner)</li>
-            <li>React, React DOM – MIT-Lizenz</li><li>ag-psd – MIT-Lizenz</li><li>Vite – MIT-Lizenz (nur Entwicklung)</li>
+            <li>React, React DOM – MIT-Lizenz</li><li>ag-psd – MIT-Lizenz</li><li>ONNX Runtime Web – MIT-Lizenz</li><li>KI-Modelle silueta / isnet-anime / isnet-general-use (U²-Net / IS-Net, über rembg) – Apache-2.0</li><li>Vite – MIT-Lizenz (nur Entwicklung)</li>
           </ul>
         </details>
       </div>
@@ -609,6 +673,11 @@ function AboutDialog() {
 function FeaturesDialog() {
   const groups = [
     ['Datei', 'Neu (Vorlagen), Öffnen (PNG, JPG, WebP, GIF, BMP, SVG, PSD, .sakura), Zuletzt geöffnet, Speichern als Projekt, PSD mit Ebenen speichern, Export PNG/JPG/WebP mit Qualität & Skalierung, Ebenen als Dateien exportieren, Platzieren, Drag & Drop, Drucken'],
+    ['Nicht-destruktiv', 'Einstellungsebenen (15 Korrekturen, jederzeit änderbar, mit Maske und Schnittmaske), Ebenengruppen (verschachtelt, Hindurchwirken, Gruppenmaske, Ein-/Ausklappen, Drag & Drop), Vektor-Formebenen (Farbe, Kontur, Radius, Seiten nachträglich änderbar), Smart-Objekte (verlustfreies Skalieren/Drehen/Verformen, Smartfilter ein-/ausschaltbar, Inhalt bearbeiten/ersetzen)'],
+    ['KI (lokal, offline)', 'Motiv auswählen, Objektauswahl und Hintergrund entfernen mit neuronalen Netzen (Anime-/Illustrationsmodell und Fotomodell enthalten, hochwertiges Fotomodell nachladbar)'],
+    ['Verformen', 'Verzerren, Perspektive, Verformen (Bézier-Gitter), Formgitter mit Pins, Verflüssigen (Krümmen, Rekonstruieren, Glätten, Strudel, Zusammenziehen, Aufblasen)'],
+    ['Automatisierung', 'Aktionen aufzeichnen/abspielen (Schritte ein-/ausschaltbar), Stapelverarbeitung ganzer Ordner, eigene Pinselspitzen aus Auswahl oder Bild, Text auf Pfad'],
+    ['Druck & Formate', 'CMYK-Proof und Farbumfang-Warnung (Näherung), PSD mit Gruppen, Text und Einstellungsebenen lesen/schreiben, RAW-Dateien (eingebettete Kameravorschau), AVIF'],
     ['Ebenen', 'Neue Ebene, Ebene durch Kopie/Ausschneiden, Duplizieren, Löschen, 19 Füllmethoden, Deckkraft, Flächendeckkraft, 4 Fixierungen, Ebenenmasken (malen, umkehren, anwenden), Schnittmasken, Füllebenen (Farbe/Verlauf/Muster), Anordnen, Ausrichten, Reduzieren, Sichtbare stempeln, Ebenenstile (Schlagschatten, Schein, Kontur, Schatten innen, Farb- und Verlaufsüberlagerung)'],
     ['Auswahl', 'Rechteck, Ellipse, Zeile, Spalte, Lasso, Polygon-Lasso, Schnellauswahl, Zauberstab, Objektauswahl, Motiv, Farbbereich, Hinzufügen/Subtrahieren/Schnittmenge, Weiche Kante, Erweitern, Verkleinern, Abrunden, Umrandung, Umkehren, Erneut auswählen, Maskierungsmodus, Auswahl speichern/laden (Alphakanäle)'],
     ['Malen & Retusche', 'Pinsel (Größe, Härte, Winkel, Rundheit, Abstand, Streuung, Jitter, Glättung, Stifdruck), Buntstift, Farbe ersetzen, Radiergummi, Hintergrund-Radiergummi, Magischer Radiergummi, Verlauf (5 Arten), Füllwerkzeug, Kopierstempel, Musterstempel, Protokollpinsel, Bereichsreparatur, Reparatur-Pinsel, Rote Augen, Weichzeichner, Scharfzeichner, Wischfinger, Abwedler, Nachbelichter, Schwamm'],

@@ -1,5 +1,5 @@
 // Filter/Korrekturen auf aktive Ebene (oder Maske) anwenden – Vorschau im Hintergrund-Thread
-import { S, doc, commit, view, emit, toast, canEditPixels, renderSmartLayer } from '../../state.js';
+import { S, doc, commit, view, emit, toast, canEditPixels, renderSmartLayer, recordStep, REC } from '../../state.js';
 import { cloneCanvas, ctx2d, ctxRead, makeCanvas } from '../../engine/util.js';
 import { applyMasked } from '../../engine/selection.js';
 import { runFilter, cancelFilters } from '../../engine/filterRunner.js';
@@ -87,6 +87,12 @@ export function showOriginal(pv) {
 
 export async function finishFilter(pv, kind, id, params, name) {
   if (!pv) return;
+  const { fg, bg, ...rest } = params || {};
+  recordStep({ type: 'filter', kind, id, params: { ...rest, ...(fg ? { fg, bg } : {}) }, name });
+  REC.depth++;
+  try { await finishFilterInner(pv, kind, id, params, name); } finally { REC.depth--; }
+}
+async function finishFilterInner(pv, kind, id, params, name) {
   if (pv.smart) { smartApply(pv, kind, id, params); commit('Smartfilter: ' + name); return; }
   pv.gen++;
   cancelFilters();

@@ -5,7 +5,7 @@ import { loadImage } from '../engine/util.js';
 import { Blossom, Logo } from './icons.jsx';
 
 const STEPS = [
-  { title: 'Willkommen bei Sakura Studio 🌸', text: 'Schön, dass du da bist! Diese kurze Tour zeigt dir in 13 Schritten, wo alles ist. Du kannst sie jederzeit über „Hilfe › Tutorial starten“ wiederholen.', target: null, prep: 'sample' },
+  { title: 'Willkommen bei Sakura Studio 🌸', text: 'Schön, dass du da bist! Diese kurze Tour zeigt dir in 14 Schritten, wo alles ist. Du kannst sie jederzeit über „Hilfe › Tutorial starten“ wiederholen.', target: null, prep: 'sample' },
   { title: 'Die Menüleiste', text: 'Hier findest du alle Befehle: Datei (Öffnen, Speichern, PSD, Export), Bearbeiten, Bild (Korrekturen, Bildgröße), Ebene, Schrift, Auswahl, Filter, Ansicht, Fenster und Hilfe. Fast jeder Befehl hat ein Tastenkürzel – es steht rechts im Menü.', target: 'menu' },
   { title: 'Die Werkzeugleiste', text: 'Links liegen alle Werkzeuge. Ein kleines Dreieck in der Ecke bedeutet: hier gibt es mehr! Halte die Maustaste gedrückt oder klicke mit rechts, um z. B. vom Pinsel zum Buntstift zu wechseln. Jedes Werkzeug hat einen Buchstaben (B = Pinsel, V = Verschieben …).', target: 'tools' },
   { title: 'Vorder- & Hintergrundfarbe', text: 'Die zwei Farbfelder unten in der Werkzeugleiste. Klicke darauf für den Farbwähler. X tauscht beide Farben, D setzt Schwarz/Weiß. Mit Alt + Klick im Bild nimmst du beim Malen eine Farbe auf.', target: 'colors' },
@@ -16,6 +16,7 @@ const STEPS = [
   { title: 'Eigenschaften & Korrekturen', text: 'Hier siehst du die Leinwandgröße deines Dokuments. Im Reiter „Korrekturen“ wendest du per Klick Helligkeit/Kontrast, Gradationskurven, Farbton/Sättigung u. v. m. an – mit Live-Vorschau.', target: 'panel-props' },
   { title: 'Protokoll, Navigator & mehr', text: 'Diese schmale Leiste öffnet weitere Bedienfelder: Protokoll (jeden Schritt zurückspringen), Navigator, Info mit Histogramm, Pinselvorgaben, Zeichen und Absatz.', target: 'side' },
   { title: 'Rückgängig & Speichern', text: 'Strg + Z macht rückgängig, Umschalt + Strg + Z wiederholt. Strg + S speichert dein Projekt mit allen Ebenen (.sakura) – standardmäßig im Ordner „Desktop › Sakura Studio › Projekte“. Unter Datei kannst du auch als PSD speichern oder als PNG/JPG exportieren.', target: 'menu' },
+  { title: 'Profi-Funktionen', text: 'Korrekturen als Einstellungsebenen (unten im Ebenen-Bedienfeld), Gruppen mit Strg+G, Smart-Objekte für verlustfreies Skalieren, Verformen/Formgitter über Bearbeiten › Transformieren, Verflüssigen (Umschalt+Strg+X) und KI: Auswahl › Motiv (KI) oder Ebene › Hintergrund entfernen (KI) – alles lokal auf deinem PC.', target: 'panel-layers' },
   { title: 'Dein Look: Themes & Einstellungen', text: 'Unter „Bearbeiten › Voreinstellungen“ (Strg+K) wählst du Dunkel, Hell, „Wie System“ oder das Anime-Theme (Sakura-Nacht / Sakura-Tag) samt Akzentfarbe. Dort stellst du auch Mausrad-Zoom, Stiftdruck, Raster, Einheiten, Autosave und mehr ein.', target: 'menu' },
   { title: 'Los geht\'s! ✨', text: 'Probier es gleich aus: Der Pinsel (B) ist aktiv – male etwas auf eine neue Ebene, wähle mit W einen Bereich aus oder öffne „Filter“. Alle Tastenkürzel findest du unter „Hilfe › Tastaturbefehle“. Viel Spaß beim Gestalten!', target: null, prep: 'layer' },
 ];

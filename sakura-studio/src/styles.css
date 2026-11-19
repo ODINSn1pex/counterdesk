@@ -470,3 +470,28 @@ kbd { background: var(--input); border: 1px solid var(--line); border-bottom-wid
 .params.compact .prow > span:first-child { width: 110px; }
 .params.compact .pv-num { width: 48px; }
 .props-scroll { display: flex; flex-direction: column; gap: 10px; max-height: 46vh; overflow: auto; }
+.modal.liquify { width: min(1300px, 96vw); height: min(860px, 92vh); }
+.lq-body { flex: 1; display: flex; min-height: 0; }
+.lq-tools { width: 54px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; border-right: 1px solid var(--line-soft); }
+.lq-canvas { flex: 1; display: grid; place-items: center; background: var(--canvas-bg); position: relative; overflow: hidden; min-width: 0; }
+.lq-canvas canvas { max-width: 100%; max-height: 100%; background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 16px 16px; cursor: none; touch-action: none; }
+.lq-cursor { position: absolute; border: 1px solid #fff; box-shadow: 0 0 0 1px #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+.lq-opts { width: 230px; padding: 12px; display: flex; flex-direction: column; gap: 10px; border-left: 1px solid var(--line-soft); }
+.lq-opts h4 { margin: 0; }
+
+.tipbtn { padding: 2px !important; }
+.tipbtn img { width: 28px; height: 28px; object-fit: contain; filter: var(--tip-filter, none); background: #fff; border-radius: 3px; }
+
+.mask-badge.proof { top: auto; bottom: 14px; border-color: #ffb86b; color: #ffcf9a; }
+.actions { display: flex; flex-direction: column; gap: 6px; }
+.act { border: 1px solid var(--line-soft); border-radius: 6px; }
+.act.rec { border-color: #ff5d73; }
+.act-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px; }
+.act-row .lname { font-size: 13px; }
+.twisty-btn { width: 18px; display: grid; place-items: center; color: var(--text-2); }
+.act-steps { padding: 2px 8px 6px 26px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.act-step { display: flex; align-items: center; gap: 6px; }
+.act-step span { flex: 1; }
+.act-step.off span { opacity: 0.45; text-decoration: line-through; }
+.act-foot { display: flex; gap: 6px; }
+.rec-btn { border-color: #ff5d73 !important; color: #ff8a9a; }
