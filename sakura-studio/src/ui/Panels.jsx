@@ -4,7 +4,7 @@ import { ADJUSTMENTS, FILTERS } from '../engine/filters.js';
 import { childrenOf, descendants, effectiveVisible } from '../engine/doc.js';
 import { ParamRow, CurvesEditor, LevelsHisto } from './Dialogs.jsx';
 import { playAction, saveActions, startRecording, stopRecording, stepLabel } from '../actions.js';
-import { REC } from '../state.js';
+import { REC, ARTBOARDS } from '../state.js';
 import { fmtUnit } from './CanvasView.jsx';
 import { BLEND_MODES } from '../engine/doc.js';
 import { makeCanvas, ctx2d, hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '../engine/util.js';
@@ -276,6 +276,17 @@ function PropertiesPanel() {
         <button className="btn small" onClick={IMAGE.trim}>Zuschneiden</button>
         <button className="btn small" onClick={() => IMAGE.rotate(90)}>↻ 90°</button>
       </div>
+      {(d.artboards || []).length > 0 && <>
+        <div className="prop-sub"><Icon name="navigator" size={12} /> Zeichenflächen</div>
+        {d.artboards.map((ab, i) => (
+          <div key={i} className="row ab-row">
+            <input className="rename" defaultValue={ab.name} key={ab.name + i} onBlur={(e) => { if (e.target.value && e.target.value !== ab.name) ARTBOARDS.rename(i, e.target.value); }} />
+            <span className="muted">{ab.w}×{ab.h}</span>
+            <button className="icon-btn small" title="Zeichenfläche entfernen (Ebenen bleiben erhalten)" onClick={() => ARTBOARDS.remove(i)}><Icon name="trash" size={12} /></button>
+          </div>
+        ))}
+        <button className="btn small" onClick={() => ARTBOARDS.exportAll('png')}>Alle exportieren…</button>
+      </>}
       {l && l.mask && <MaskProps l={l} />}
     </div>
   );

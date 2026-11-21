@@ -3,6 +3,7 @@ import { S, emit, useStore, doc, view, commit, closeDialog, newDocument, IMAGE, 
 import { feather as selFeather, expand as selExpand, contract as selContract, smooth as selSmooth } from '../engine/selection.js';
 import { cloneCanvas } from '../engine/util.js';
 import { LiquifyDialog } from './dialogs/Liquify.jsx';
+import { RawDialog } from './dialogs/RawDialog.jsx';
 import { ADJUSTMENTS, FILTERS, histogram, curveLut } from '../engine/filters.js';
 import { BLEND_MODES } from '../engine/doc.js';
 import { beginPreview, previewFilter, showOriginal, finishFilter, cancelPreview } from './dialogs/applyFilter.js';
@@ -55,7 +56,7 @@ export function Dialogs() {
     new: NewDocDialog, filter: FilterDialog, imageSize: ImageSizeDialog, canvasSize: CanvasSizeDialog, fill: FillDialog, stroke: StrokeDialog,
     export: ExportDialog, modifySel: ModifySelDialog, colorRange: ColorRangeDialog, layerStyle: LayerStyleDialog, colorPicker: ColorPickerDialog,
     shortcuts: ShortcutsDialog, prefs: PrefsDialog, about: AboutDialog, confirmClose: ConfirmCloseDialog, guide: GuideDialog, histogram: HistogramDialog,
-    gradientEditor: GradientEditorDialog, features: FeaturesDialog, appClose: AppCloseDialog, selectMask: SelectMaskDialog, recovery: RecoveryDialog, liquify: LiquifyDialog, batch: BatchDialog,
+    gradientEditor: GradientEditorDialog, features: FeaturesDialog, appClose: AppCloseDialog, selectMask: SelectMaskDialog, recovery: RecoveryDialog, liquify: LiquifyDialog, batch: BatchDialog, raw: RawDialog, artboard: ArtboardDialog, animExport: AnimExportDialog, genfill: GenFillDialog, help: HelpDialog,
   }[dg.type];
   return C ? <C dg={dg} key={dg.type + (dg.id || '') + (dg.tab || '')} /> : null;
 }
@@ -285,12 +286,14 @@ function StrokeDialog() {
 
 // ---------------- Export ----------------
 function ExportDialog() {
+  const [ink, setInk] = useState(300);
   const [fmt, setFmt] = useState('png'), [q, setQ] = useState(90), [scale, setScale] = useState(100), [transp, setTransp] = useState(true);
   const d = doc();
-  const ok = () => { closeDialog(); exportImage(fmt, q / 100, scale / 100, transp); };
+  const ok = () => { closeDialog(); if (fmt === 'tiff' || fmt === 'cmyk') import('../state.js').then((m) => m.exportTiff(fmt === 'cmyk', ink)); else exportImage(fmt, q / 100, scale / 100, transp); };
   return (
     <Modal title="Exportieren als" onOk={ok} onCancel={closeDialog} okLabel="Exportieren…">
-      <label className="prow"><span>Format</span><Sel value={fmt} onChange={setFmt} options={[['png', 'PNG'], ['jpeg', 'JPG'], ['webp', 'WebP']]} width={160} /></label>
+      <label className="prow"><span>Format</span><Sel value={fmt} onChange={setFmt} options={[['png', 'PNG'], ['jpeg', 'JPG'], ['webp', 'WebP'], ['tiff', 'TIFF (RGB)'], ['cmyk', 'TIFF (CMYK für Druck)']]} width={200} /></label>
+      {fmt === 'cmyk' && <><Num label="Max. Farbauftrag" value={ink} min={200} max={400} onChange={setInk} unit=" %" /><div className="hint">Umrechnung mit Unterfarbenreduktion (GCR), ohne Druckerprofil. Für farbkritischen Druck die Datei von der Druckerei prüfen lassen.</div></>}
       {fmt !== 'png' && <Num label="Qualität" value={q} min={1} max={100} onChange={setQ} unit="%" />}
       {fmt !== 'jpeg' && <Check label="Transparenz" value={transp} onChange={setTransp} />}
       <Num label="Skalierung" value={scale} min={1} max={400} onChange={setScale} unit="%" />
@@ -506,7 +509,7 @@ function PrefsDialog({ dg }) {
             <h4>Benutzeroberfläche</h4>
             <Row label="Farbschema">
               <div className="theme-grid">
-                {[['dark', 'Dunkel'], ['light', 'Hell'], ['system', 'Wie System'], ['anime', 'Anime · Sakura-Nacht'], ['anime-day', 'Anime · Sakura-Tag']].map(([k, n]) => (
+                {[['dark', 'Dunkel'], ['light', 'Hell'], ['system', 'Wie System'], ['anime', 'Anime']].map(([k, n]) => (
                   <button key={k} className={'theme-card t-' + k + (p.theme === k ? ' on' : '')} onClick={() => set('theme')(k)}><span className="tc-prev"><i /><i /><i /></span>{n}</button>
                 ))}
               </div>
@@ -521,6 +524,7 @@ function PrefsDialog({ dg }) {
             <Row label="Ebenen-Miniaturen"><Sel value={p.thumbSize} onChange={set('thumbSize')} options={[['small', 'Klein'], ['medium', 'Mittel'], ['large', 'Groß']]} width={120} /></Row>
             <Row label="Animationen"><Check label="Bewegungen reduzieren (keine Animationen)" value={p.reduceMotion} onChange={set('reduceMotion')} /></Row>
             <Row label="Anime-Theme"><Check label="Fallende Kirschblüten auf dem Startbildschirm" value={p.sakuraPetals} onChange={set('sakuraPetals')} /></Row>
+            <Row label="Aktionsleiste"><Check label="Schwebende Aktionsleiste auf der Arbeitsfläche anzeigen" value={p.quickBar !== false} onChange={set('quickBar')} /></Row>
             <Row label="QuickInfos"><Check label="QuickInfos (Tooltips) anzeigen" value={p.tooltips} onChange={set('tooltips')} /></Row>
           </>}
           {cat === 'tools' && <>
@@ -559,7 +563,7 @@ function PrefsDialog({ dg }) {
           </>}
           {cat === 'files' && <>
             <h4>Dateien</h4>
-            <Row label="Standard-Speicherordner" hint={p.saveDir ? '' : 'Standard: Desktop\\Sakura Studio\\Projekte'}>
+            <Row label="Standard-Speicherordner" hint={p.saveDir ? '' : 'Standard: Desktop\\Lumora\\Projekte'}>
               <div className="row"><input className="path-in" readOnly value={p.saveDir || '(Standard)'} /><button className="btn small" onClick={chooseDir}>Ändern…</button>{p.saveDir && <button className="btn small" onClick={() => set('saveDir')('')}>Standard</button>}</div>
             </Row>
             <Row label="Export-Format (Schnell-Export)"><Sel value={p.exportFormat} onChange={set('exportFormat')} options={[['png', 'PNG'], ['jpeg', 'JPG'], ['webp', 'WebP']]} width={120} /></Row>
@@ -613,6 +617,120 @@ function SelectMaskDialog() {
   );
 }
 
+// ---------------- Funktionslexikon ----------------
+function HelpDialog() {
+  const [q, setQ] = useState('');
+  const [entries, setEntries] = useState([]);
+  useEffect(() => {
+    Promise.all([import('./tutorialData.js'), import('../commands.js')]).then(([T, C]) => {
+      const out = [];
+      Object.values(T.TOOL_HELP).forEach(([t, x]) => out.push({ cat: 'Werkzeug', title: t, text: x }));
+      T.CHAPTERS.forEach((c) => c.steps.forEach((s) => { if (!s.tool && s.title !== 'Willkommen bei Lumora') out.push({ cat: c.name, title: s.title, text: s.text }); }));
+      const walk = (items, path, menu) => items.forEach((it) => {
+        if (!it || it === '-') return;
+        const label = (typeof it.label === 'function' ? it.label() : it.label).replace(/^✓ /, '');
+        if (Array.isArray(it.sub)) walk(it.sub, path + label + ' › ', menu);
+        else if (it.run) out.push({ cat: 'Menü ' + menu, title: label, text: 'Zu finden unter: ' + menu + ' › ' + path + label + (it.key ? ' · Tastenkürzel: ' + it.key : ''), key: it.key, run: it.run, enabled: it.enabled });
+      });
+      C.MENUS.forEach((m) => walk(m.items, '', m.label));
+      setEntries(out);
+    });
+  }, []);
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const list = entries.filter((e) => words.every((w) => (e.title + ' ' + e.text + ' ' + e.cat).toLowerCase().includes(w))).slice(0, 150);
+  return (
+    <Modal title="Funktionslexikon" onCancel={closeDialog} width={760}>
+      <input className="path-in help-search" autoFocus placeholder="Suche, z. B. „Hintergrund entfernen“, „Maske“, „Kurven“, „Strg+J“ …" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="hint">{list.length} Treffer · Klick auf „Ausführen“ startet den Befehl direkt</div>
+      <div className="help-list">
+        {list.map((e, i) => (
+          <div key={i} className="help-item">
+            <h5>{e.title}<span className="muted">{e.cat}</span>{e.key && <kbd>{e.key}</kbd>}<span className="flex" />
+              {e.run && <button className="btn small" disabled={e.enabled && !e.enabled()} onClick={() => { closeDialog(); setTimeout(() => e.run(), 0); }}>Ausführen</button>}</h5>
+            <p>{e.text}</p>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------- Generative Füllung ----------------
+function GenFillDialog() {
+  const [has, setHas] = useState(null), [key, setKey] = useState(''), [prompt, setPrompt] = useState(''), [busy, setBusy] = useState(false), [err, setErr] = useState(null);
+  useEffect(() => { if (window.native) window.native.secretHas('openai').then(setHas); else setHas(false); }, []);
+  const saveKey = async () => { if (!key.trim().startsWith('sk-')) { setErr('Der Schlüssel beginnt normalerweise mit „sk-“'); return; } await window.native.secretSet('openai', key.trim()); setKey(''); setHas(true); setErr(null); };
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try { const { generativeFill } = await import('../genfill.js'); await generativeFill(prompt.trim()); closeDialog(); }
+    catch (e) { setErr(e.message); setBusy(false); }
+  };
+  if (!window.native) return <Modal title="Generative Füllung" onCancel={closeDialog}><p>Nur in der Desktop-App verfügbar.</p></Modal>;
+  return (
+    <Modal title="Generative Füllung" onCancel={closeDialog} onOk={has && !busy ? run : null} okLabel="Erzeugen" width={500}>
+      {has === false && <>
+        <p>Die generative Füllung nutzt die Bild-KI von OpenAI mit <b>deinem eigenen API-Schlüssel</b>. Es fallen dort Kosten pro Bild an; der markierte Bildausschnitt wird dafür an OpenAI gesendet.</p>
+        <label className="field col"><span>OpenAI-API-Schlüssel</span><input type="password" value={key} placeholder="sk-…" onChange={(e) => setKey(e.target.value)} /></label>
+        <div className="row"><button className="btn primary" onClick={saveKey}>Schlüssel sicher speichern</button><span className="hint">verschlüsselt mit der Windows-Kontosicherung</span></div>
+      </>}
+      {has && <>
+        <label className="field col"><span>Was soll im markierten Bereich entstehen? (leer = Bereich passend auffüllen)</span><textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="z. B. ein kleiner Steg mit Laternen" /></label>
+        <div className="row"><span className="hint">Ergebnis kommt als neue Ebene mit Maske – das Original bleibt unverändert.</span><div className="flex" /><button className="btn small ghost" onClick={async () => { await window.native.secretSet('openai', ''); setHas(false); }}>Schlüssel entfernen</button></div>
+      </>}
+      {busy && <div className="hint"><span className="spin" /> Bild wird erzeugt (kann 10–40 s dauern) …</div>}
+      {err && <div className="hint warn">{err}</div>}
+    </Modal>
+  );
+}
+
+// ---------------- Animation exportieren ----------------
+function AnimExportDialog() {
+  const [fmts, setFmts] = useState([]);
+  const [fmt, setFmt] = useState('gif'), [scale, setScale] = useState(100), [loops, setLoops] = useState(1), [busy, setBusy] = useState(false);
+  useEffect(() => { import('../animation.js').then((A) => setFmts(A.videoFormats())); }, []);
+  const d = doc();
+  const ok = async () => {
+    setBusy(true);
+    const A = await import('../animation.js');
+    const base = d.name.replace(/\.[^.]+$/, '');
+    try {
+      if (fmt === 'gif') {
+        const bytes = await A.exportGif({ scale: scale / 100 });
+        closeDialog(); await import('../state.js').then((m) => m.saveBytesPublic(base + '.gif', bytes, [{ name: 'GIF', extensions: ['gif'] }]));
+      } else {
+        const f = fmts.find((x) => x[0] === fmt);
+        const bytes = await A.exportVideo(fmt, { scale: scale / 100, loops });
+        closeDialog(); await import('../state.js').then((m) => m.saveBytesPublic(base + '.' + f[2], bytes, [{ name: f[1], extensions: [f[2]] }]));
+      }
+    } catch (e) { toast('Export fehlgeschlagen: ' + e.message); setBusy(false); }
+  };
+  const total = (d.frames || []).reduce((a, f) => a + Math.max(34, f.delay), 0);
+  return (
+    <Modal title="Animation exportieren" onOk={busy ? null : ok} onCancel={closeDialog} okLabel="Exportieren…">
+      <label className="prow"><span>Format</span><Sel value={fmt} onChange={setFmt} options={[['gif', 'GIF (animiert, Endlosschleife)'], ...fmts.map(([m, n]) => [m, n])]} width={240} /></label>
+      <Num label="Skalierung" value={scale} min={5} max={200} onChange={setScale} unit=" %" />
+      {fmt !== 'gif' && <Num label="Durchläufe" value={loops} min={1} max={20} onChange={setLoops} />}
+      <div className="hint">{(d.frames || []).length} Frames · Dauer {((fmt === 'gif' ? 1 : loops) * total / 1000).toFixed(1)} s{fmt !== 'gif' ? ' · Video wird in Echtzeit aufgenommen' : ''}</div>
+      {busy && <div className="hint"><span className="spin" /> Exportiere …</div>}
+    </Modal>
+  );
+}
+
+// ---------------- Zeichenfläche ----------------
+function ArtboardDialog() {
+  const [pi, setPi] = useState(0), [name, setName] = useState(''), [w, setW] = useState(1080), [h, setH] = useState(1080), [bg, setBgC] = useState('#ffffff'), [transp, setTransp] = useState(false);
+  const ok = () => { closeDialog(); import('../state.js').then((m) => m.ARTBOARDS.add(name.trim() || null, w, h, transp ? 'transparent' : bg)); };
+  return (
+    <Modal title="Neue Zeichenfläche" onOk={ok} onCancel={closeDialog} okLabel="Erstellen">
+      <label className="field col"><span>Name</span><input value={name} placeholder="z. B. Instagram-Beitrag" onChange={(e) => setName(e.target.value)} /></label>
+      <label className="prow"><span>Vorgabe</span><Sel value={String(pi)} onChange={(v) => { const i = Number(v); setPi(i); import('../state.js').then((m) => { const p = m.ARTBOARD_PRESETS[i]; setW(p[1]); setH(p[2]); if (!name) setName(p[0]); }); }} options={[['0', 'Instagram-Beitrag 1080×1080'], ['1', 'Instagram-Story 1080×1920'], ['2', 'Full HD 1920×1080'], ['3', 'YouTube-Thumbnail 1280×720'], ['4', 'A4 1240×1754'], ['5', 'iPhone 1179×2556'], ['6', 'Web-Banner 728×90'], ['7', 'Eigene Größe']]} width={240} /></label>
+      <div className="row"><Num label="Breite" value={w} min={1} max={16000} onChange={setW} unit=" Px" width={64} /><Num label="Höhe" value={h} min={1} max={16000} onChange={setH} unit=" Px" width={64} /></div>
+      <div className="row"><Check label="Transparenter Hintergrund" value={transp} onChange={setTransp} />{!transp && <input type="color" className="color-in" value={bg} onChange={(e) => setBgC(e.target.value)} />}</div>
+      <div className="hint">Zeichenflächen werden nebeneinander angelegt; die Arbeitsfläche wächst mit. Export: Datei › Exportieren › Zeichenflächen als Dateien. Tipp: Mit dem Zeichenflächen-Werkzeug (V-Gruppe) direkt aufziehen.</div>
+    </Modal>
+  );
+}
+
 // ---------------- Stapelverarbeitung ----------------
 function BatchDialog() {
   const [ai, setAi] = useState(0), [inDir, setIn] = useState(''), [outDir, setOut] = useState(''), [fmt, setFmt] = useState('jpeg'), [q, setQ] = useState(90);
@@ -643,7 +761,7 @@ function RecoveryDialog({ dg }) {
   const items = dg.items || [];
   return (
     <Modal title="Dokumente wiederherstellen" onCancel={async () => { if (window.native) await window.native.recoveryClear(); closeDialog(); }} onOk={() => { closeDialog(); restoreRecovery(items); }} okLabel="Wiederherstellen">
-      <p>Sakura Studio wurde nicht ordnungsgemäß beendet. Folgende ungespeicherte Dokumente können wiederhergestellt werden:</p>
+      <p>Lumora wurde nicht ordnungsgemäß beendet. Folgende ungespeicherte Dokumente können wiederhergestellt werden:</p>
       <ul className="rec-list">{items.map((it) => { let n = it.name; try { n = JSON.parse(new TextDecoder().decode(new Uint8Array(it.data))).name; } catch (e) { /* */ } return <li key={it.name}>{n}</li>; })}</ul>
       <div className="hint">„Abbrechen“ verwirft die Sicherungen.</div>
     </Modal>
@@ -652,17 +770,17 @@ function RecoveryDialog({ dg }) {
 
 function AboutDialog() {
   return (
-    <Modal title="Über Sakura Studio" onCancel={closeDialog} width={480}>
+    <Modal title="Über Lumora" onCancel={closeDialog} width={480}>
       <div className="about">
         <Logo size={64} />
-        <h2>Sakura Studio</h2>
-        <div>Version 2.0.0 · Bildbearbeitung für Windows</div>
+        <h2>Lumora</h2>
+        <div>Version 3.0.0 · Bildbearbeitung für Windows</div>
         <p>Ebenen, Masken, Auswahlen, Pinsel, Retusche, Text, Formen, Pfade, über 50 Korrekturen & Filter, PSD-Import/-Export und mehr.</p>
-        <p className="muted">Arbeitsordner: Desktop\Sakura Studio\Projekte · Einstellungen: Bearbeiten › Voreinstellungen (Strg+K)</p>
+        <p className="muted">Arbeitsordner: Desktop\Lumora\Projekte · Einstellungen: Bearbeiten › Voreinstellungen (Strg+K)</p>
         <details className="licenses"><summary>Open-Source-Komponenten</summary>
           <ul>
             <li>Electron – MIT-Lizenz</li><li>Chromium – BSD-Lizenz u. a. (siehe LICENSES.chromium.html im Programmordner)</li>
-            <li>React, React DOM – MIT-Lizenz</li><li>ag-psd – MIT-Lizenz</li><li>ONNX Runtime Web – MIT-Lizenz</li><li>KI-Modelle silueta / isnet-anime / isnet-general-use (U²-Net / IS-Net, über rembg) – Apache-2.0</li><li>Vite – MIT-Lizenz (nur Entwicklung)</li>
+            <li>React, React DOM – MIT-Lizenz</li><li>ag-psd – MIT-Lizenz</li><li>ONNX Runtime Web – MIT-Lizenz</li><li>LibRaw (libraw-wasm) – LGPL-2.1/CDDL bzw. ISC</li><li>LaMa-Inpainting (OpenCV Model Zoo) – Apache-2.0</li><li>gifenc, UTIF – MIT-Lizenz</li><li>KI-Modelle silueta / isnet-anime / isnet-general-use (U²-Net / IS-Net, über rembg) – Apache-2.0</li><li>Vite – MIT-Lizenz (nur Entwicklung)</li>
           </ul>
         </details>
       </div>
@@ -672,7 +790,9 @@ function AboutDialog() {
 
 function FeaturesDialog() {
   const groups = [
-    ['Datei', 'Neu (Vorlagen), Öffnen (PNG, JPG, WebP, GIF, BMP, SVG, PSD, .sakura), Zuletzt geöffnet, Speichern als Projekt, PSD mit Ebenen speichern, Export PNG/JPG/WebP mit Qualität & Skalierung, Ebenen als Dateien exportieren, Platzieren, Drag & Drop, Drucken'],
+    ['Datei', 'Neu (Vorlagen), Öffnen (PNG, JPG, WebP, GIF, BMP, SVG, PSD, .lumora), Zuletzt geöffnet, Speichern als Projekt, PSD mit Ebenen speichern, Export PNG/JPG/WebP mit Qualität & Skalierung, Ebenen als Dateien exportieren, Platzieren, Drag & Drop, Drucken'],
+    ['Entfernen & Freistellen', 'Markierte Bereiche mit KI entfernen (LaMa-Modell, lokal), Entfernen-Werkzeug zum Übermalen, Hintergrund entfernen als Maske, Motiv/Auswahl in neue Ebene ausschneiden oder kopieren, schwebende Aktionsleiste'],
+    ['Neu in 3.0', 'Echte RAW-Entwicklung (LibRaw: Weißabgleich, Belichtung, Lichter, Rauschreduzierung, Demosaicing), Photoshop-Pinsel (.abr), Zeichenflächen, CMYK-TIFF-Export und TIFF-Import, Zeitleiste mit GIF-/MP4-/WebM-Export, generative Füllung (OpenAI, eigener Schlüssel), Plugin-Schnittstelle, Funktionslexikon (F1), Tutorial mit 55 Schritten'],
     ['Nicht-destruktiv', 'Einstellungsebenen (15 Korrekturen, jederzeit änderbar, mit Maske und Schnittmaske), Ebenengruppen (verschachtelt, Hindurchwirken, Gruppenmaske, Ein-/Ausklappen, Drag & Drop), Vektor-Formebenen (Farbe, Kontur, Radius, Seiten nachträglich änderbar), Smart-Objekte (verlustfreies Skalieren/Drehen/Verformen, Smartfilter ein-/ausschaltbar, Inhalt bearbeiten/ersetzen)'],
     ['KI (lokal, offline)', 'Motiv auswählen, Objektauswahl und Hintergrund entfernen mit neuronalen Netzen (Anime-/Illustrationsmodell und Fotomodell enthalten, hochwertiges Fotomodell nachladbar)'],
     ['Verformen', 'Verzerren, Perspektive, Verformen (Bézier-Gitter), Formgitter mit Pins, Verflüssigen (Krümmen, Rekonstruieren, Glätten, Strudel, Zusammenziehen, Aufblasen)'],
@@ -685,7 +805,7 @@ function FeaturesDialog() {
     ['Korrekturen', 'Helligkeit/Kontrast, Tonwertkorrektur, Gradationskurven (RGB & Kanäle), Belichtung, Dynamik, Farbton/Sättigung, Farbbalance, Schwarzweiß, Fotofilter, Kanalmixer, Umkehren, Tontrennung, Schwellenwert, Verlaufsumsetzung, Selektive Farbkorrektur, Tiefen/Lichter, HDR-Tonung, Sättigung verringern, Farbe ersetzen, Tonwertangleichung, Auto-Farbton/-Kontrast/-Farbe'],
     ['Filter', 'Gaußscher Weichzeichner, Bewegungsunschärfe, Radialer Weichzeichner, Tilt-Shift, Matter machen, Durchschnitt, Scharfzeichnen, Unscharf maskieren, Rauschen hinzufügen/entfernen, Median, Relief, Konturen finden, Leuchtende Konturen, Solarisation, Ölfarbe, Strudel, Wölben, Distorsion, Welle, Kräuseln, Polarkoordinaten, Verflüssigen, Mosaik, Kristallisieren, Farbraster, Wolken, Blendenflecke, Vignette, Hochpass, Verschiebungseffekt, Min/Max'],
     ['Text, Formen & Pfade', 'Horizontaler/vertikaler Text, Schriftart, Größe, Farbe, Fett/Kursiv/Unterstrichen/Durchgestrichen/Großbuchstaben, Zeilenabstand, Laufweite, Ausrichtung; Rechteck, abgerundetes Rechteck, Ellipse, Dreieck, Polygon, Stern, Herz, Kirschblüte, Pfeil, Sprechblase, Linie mit Pfeilspitze; Zeichenstift, Freiform-Zeichenstift, Direktauswahl, Pfad füllen/Kontur/als Auswahl'],
-    ['Themes & Einstellungen', 'Dunkel, Hell, Wie System, Anime · Sakura-Nacht, Anime · Sakura-Tag, 7 Akzentfarben, UI-Skalierung, reduzierte Bewegung; Voreinstellungen für Autosave/Wiederherstellung, Protokolltiefe, Mausrad-Zoom, Pinselcursor, Stiftdruck, Transformieren, Leistung, Schachbrett, Raster, Hilfslinien, Einheiten (Px, cm, mm, Zoll, Pt, %), Speicherordner und Export'],
+    ['Themes & Einstellungen', 'Dunkel, Hell, Wie System, Anime, 7 Akzentfarben, UI-Skalierung, reduzierte Bewegung; Voreinstellungen für Autosave/Wiederherstellung, Protokolltiefe, Mausrad-Zoom, Pinselcursor, Stiftdruck, Transformieren, Leistung, Schachbrett, Raster, Hilfslinien, Einheiten (Px, cm, mm, Zoll, Pt, %), Speicherordner und Export'],
     ['Ansicht & Arbeitsbereich', 'Zoom, Hand, Navigator, Lineale, Hilfslinien (aus Linealen ziehen), Raster, Einrasten, Pixelraster, Kanalansicht, Bildschirmmodi, Protokoll mit Rücksprung, Info mit Histogramm, Farb-, Farbfeld-, Verlaufs-, Muster-, Bibliotheks-, Pinsel-, Zeichen- und Absatz-Bedienfelder, mehrere Dokumente als Reiter'],
   ];
   return (
@@ -709,7 +829,7 @@ function ConfirmCloseDialog({ dg }) {
 function AppCloseDialog() {
   const dirty = S.docs.filter((d) => d.dirty);
   return (
-    <Modal title="Sakura Studio beenden" onCancel={closeDialog} onOk={() => window.native && window.native.confirmClose()} okLabel="Ohne Speichern beenden">
+    <Modal title="Lumora beenden" onCancel={closeDialog} onOk={() => window.native && window.native.confirmClose()} okLabel="Ohne Speichern beenden">
       <p>{dirty.length} Dokument(e) mit ungespeicherten Änderungen:</p>
       <ul>{dirty.map((d) => <li key={d.id}>{d.name}</li>)}</ul>
     </Modal>

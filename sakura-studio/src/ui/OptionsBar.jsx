@@ -219,7 +219,7 @@ export function OptionsBar() {
   } else if (t === 'heal') {
     body = sub === 'redeye' ? <><Num label="Pupillengröße:" value={S.brush.size} min={2} max={500} onChange={set(S.brush, 'size')} unit=" Px" /><span className="hint">Auf rotes Auge klicken</span></> : <>
       <BrushPicker o={S.heal} />
-      <span className="hint">{sub === 'spot' ? 'Inhaltsbasiert: einfach über Makel malen' : 'Alt + Klick: Quelle festlegen, dann malen'}</span>
+      <span className="hint">{sub === 'spot' ? 'Inhaltsbasiert: einfach über Makel malen' : sub === 'remove' ? 'Objekt übermalen – beim Loslassen entfernt die KI es und ergänzt den Hintergrund' : 'Alt + Klick: Quelle festlegen, dann malen'}</span>
       {sub === 'healing' && <Check label="Ausger." value={S.stampOpts.aligned} onChange={set(S.stampOpts, 'aligned')} />}
     </>;
   } else if (t === 'brush') {

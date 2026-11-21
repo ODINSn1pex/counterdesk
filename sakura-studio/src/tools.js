@@ -67,6 +67,18 @@ export function makeTipFromCanvas(src, name) {
   emit();
   return tid;
 }
+// Pinselspitze aus Alpha-Maske übernehmen (z. B. aus .abr-Dateien)
+export function addTipFromAlpha(c, name, spacing = 0.25) {
+  const tid = 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const max = 500, k = Math.min(1, max / Math.max(c.width, c.height));
+  let t = c;
+  if (k < 1) { t = makeCanvas(c.width * k, c.height * k); const tx = ctx2d(t); tx.imageSmoothingQuality = 'high'; tx.drawImage(c, 0, 0, t.width, t.height); }
+  tipCanvases.set(tid, t);
+  S.customBrushes = [...(S.customBrushes || []), { id: tid, name, data: t.toDataURL('image/png'), spacing }];
+  try { localStorage.setItem('sakura.customBrushes', JSON.stringify(S.customBrushes)); } catch (e) { /* voll */ }
+  return tid;
+}
+
 export function definePresetFromSelection() {
   const d = doc(); if (!d) return;
   const src = cloneCanvas(getMerged(d));
@@ -528,7 +540,9 @@ export function pointerDown(e) {
       if (sub === 'zoom' && !SPACE.held) { VIEW.zoomBy(e.alt ? 1 / 1.5 : 1.5, e.cx, e.cy); return; }
       T = { kind: 'pan', sx: e.sx, sy: e.sy, px: d.panX, py: d.panY };
       return;
-    case 'move': return moveDown(d, e);
+    case 'move':
+      if (sub === 'artboard') { T = { kind: 'marquee', a: p, b: p, mode: 'new', artboard: true }; return; }
+      return moveDown(d, e);
     case 'marquee': {
       if (sub === 'row' || sub === 'col') {
         const c = SEL.shapeCanvas(d, (x) => sub === 'row' ? x.fillRect(0, Math.floor(p.y), d.w, 1) : x.fillRect(Math.floor(p.x), 0, 1, d.h));
@@ -574,6 +588,13 @@ export function pointerDown(e) {
     }
     case 'heal': {
       if (sub === 'redeye') { redEye(d, p); return; }
+      if (sub === 'remove') {
+        if (!canEditPixels(d.layer)) return;
+        const m = makeCanvas(d.w, d.h);
+        T = { kind: 'removeStroke', mask: m, last: p };
+        const x = ctx2d(m); x.fillStyle = '#ff2d55'; x.beginPath(); x.arc(p.x, p.y, S.heal.size / 2, 0, 7); x.fill();
+        S.removeMask = m; view.request(); return;
+      }
       if (sub === 'healing' && e.alt) { S.cloneSource = { ...p }; S.cloneOffset = null; toast('Quelle festgelegt'); return; }
       if (sub === 'healing' && !S.cloneSource) { toast('Alt + Klick, um eine Quelle festzulegen'); return; }
       if (sub === 'healing' && (!S.stampOpts.aligned || S.cloneOffset == null)) S.cloneOffset = { x: S.cloneSource.x - p.x, y: S.cloneSource.y - p.y };
@@ -679,6 +700,11 @@ export function pointerMove(e) {
       strokeTo(st, q, e.pressure);
       break;
     }
+    case 'removeStroke': {
+      const x = ctx2d(T.mask); x.strokeStyle = '#ff2d55'; x.lineWidth = S.heal.size; x.lineCap = 'round'; x.lineJoin = 'round';
+      x.beginPath(); x.moveTo(T.last.x, T.last.y); x.lineTo(p.x, p.y); x.stroke(); T.last = p;
+      view.overlay(); break;
+    }
     case 'bgerase': interp(T.st, p, S.eraser.size * 0.25, (q) => bgEraserDab(T.st, q)); break;
     case 'retouch': interp(T.st, p, S.retouch.size * 0.2, (q) => retouchAt(T, q)); break;
     case 'gradient': {
@@ -738,6 +764,11 @@ export function pointerUp(e) {
         if (t.mode === 'new' && d.selection) { d.deselect(); commit('Auswahl aufheben'); }
         break;
       }
+      if (t.artboard) {
+        if (r.w < 20 || r.h < 20) break;
+        import('./state.js').then((m) => m.ARTBOARDS.add(null, r.w, r.h, '#ffffff', r));
+        break;
+      }
       if (t.object) {
         // Objektauswahl: Motiv innerhalb des Rechtecks
         const src = mergedCanvas(d); const part = makeCanvas(r.w, r.h); ctx2d(part).drawImage(src, -r.x, -r.y);
@@ -766,6 +797,7 @@ export function pointerUp(e) {
       break;
     }
     case 'bgerase': commit('Hintergrund-Radiergummi'); break;
+    case 'removeStroke': { const m = t.mask; import('./state.js').then((st) => st.EDIT.remove(m)).finally(() => { S.removeMask = null; view.overlay(); }); break; }
     case 'retouch': commit({ blur: 'Weichzeichner', sharpen: 'Scharfzeichner', smudge: 'Wischfinger', dodge: 'Abwedler', burn: 'Nachbelichter', sponge: 'Schwamm' }[t.mode]); break;
     case 'gradient': if (dist(t.a, t.b) > 1) commit('Verlauf'); break;
     case 'shape': finishShape(d, t, e); break;

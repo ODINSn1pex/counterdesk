@@ -221,6 +221,7 @@ export function CanvasView() {
       x.stroke(); x.restore();
     }
 
+    if (S.removeMask) { x.save(); x.globalAlpha = 0.45; x.drawImage(S.removeMask, g.ox, g.oy, dw, dh); x.restore(); }
     if (dd.selection && !S.ui.quickMask) {
       if (st.edgesRev !== dd.selRev || st.edgesDoc !== dd.id) { st.edges = edgeCanvas(dd.selection); st.edgesRev = dd.selRev; st.edgesDoc = dd.id; }
       if (st.edges) drawAnts(x, st, g, dd, t);
@@ -261,6 +262,13 @@ export function CanvasView() {
     if (S.measure && S.tool === 'eyedropper' && S.sub.eyedropper === 'ruler') {
       const m = S.measure; x.strokeStyle = '#ffde59'; x.lineWidth = 1.5 * lw; x.beginPath(); x.moveTo(m.a.x, m.a.y); x.lineTo(m.b.x, m.b.y); x.stroke();
       for (const q of [m.a, m.b]) { x.beginPath(); x.moveTo(q.x - 6 * lw, q.y); x.lineTo(q.x + 6 * lw, q.y); x.moveTo(q.x, q.y - 6 * lw); x.lineTo(q.x, q.y + 6 * lw); x.stroke(); }
+    }
+    if (dd.artboards && dd.artboards.length) {
+      dd.artboards.forEach((ab) => {
+        x.save(); x.strokeStyle = col.accent; x.globalAlpha = 0.85; x.lineWidth = 1.5 * lw; x.strokeRect(ab.x, ab.y, ab.w, ab.h);
+        x.globalAlpha = 1; x.fillStyle = col.text; x.font = `${12 * lw}px "Segoe UI", sans-serif`; x.textBaseline = 'bottom';
+        x.fillText(`${ab.name}  ${ab.w}×${ab.h}`, ab.x, ab.y - 4 * lw); x.restore();
+      });
     }
     if (S.ui.showGuides) {
       x.strokeStyle = S.prefs.guideColor || '#3ce0ff'; x.lineWidth = lw;
@@ -474,7 +482,35 @@ export function CanvasView() {
       {d && d.layer && d.layer.editMask && <div className="mask-badge">Maske wird bearbeitet</div>}
       {S.ui.quickMask && <div className="mask-badge qm">Maskierungsmodus (Q)</div>}
       {(S.ui.proof || S.ui.gamut) && <div className="mask-badge proof">{S.ui.proof ? 'Proof: CMYK (Näherung)' : ''}{S.ui.proof && S.ui.gamut ? ' · ' : ''}{S.ui.gamut ? 'Farbumfang-Warnung' : ''}</div>}
+      {d && !S.transform && !S.ui.textEdit && S.prefs.quickBar !== false && <QuickBar d={d} />}
       {S.ui.busy && <div className="busy-badge"><span className="spin" /> {S.ui.busy} …</div>}
+    </div>
+  );
+}
+
+// Schwebende Aktionsleiste (wie die Kontext-Taskleiste in Photoshop)
+function QuickBar({ d }) {
+  const sel = !!d.selection;
+  const run = (fn) => (e) => { e.stopPropagation(); import('../state.js').then((m) => fn(m)); };
+  if (S.ui.busy) return null;
+  return (
+    <div className="quickbar" data-tut="quickbar" onMouseDown={(e) => e.stopPropagation()}>
+      {sel ? <>
+        <button className="qb primary" title="Markierten Bereich entfernen und mit passendem Inhalt füllen (Umschalt+Strg+Entf)" onClick={run((m) => m.EDIT.remove())}>✨ Entfernen</button>
+        <button className="qb" title="Auswahl ausschneiden und als neue Ebene einfügen (Umschalt+Strg+J)" onClick={run((m) => m.EDIT.cutToLayer())}>Ausschneiden → Ebene</button>
+        <button className="qb" title="Auswahl als neue Ebene kopieren (Strg+J)" onClick={run((m) => m.EDIT.copyToLayer())}>Kopieren → Ebene</button>
+        <button className="qb" title="Auswahl löschen (transparent) (Entf)" onClick={run((m) => m.EDIT.clear())}>Löschen</button>
+        <button className="qb" title="Auswahl als Ebenenmaske" onClick={run((m) => m.L.addMask(true))}>Maske</button>
+        <button className="qb" title="Auf Auswahl freistellen" onClick={run((m) => m.IMAGE.cropToSelection())}>Freistellen</button>
+        <button className="qb" title="Auswahl umkehren (Umschalt+Strg+I)" onClick={run((m) => m.SELECT.invert())}>Umkehren</button>
+        <button className="qb" title="Kanten verfeinern" onClick={run((m) => m.openDialog('selectMask'))}>Verfeinern</button>
+        <button className="qb ghost" title="Auswahl aufheben (Strg+D)" onClick={run((m) => m.SELECT.none())}>✕</button>
+      </> : <>
+        <button className="qb" title="Hauptmotiv per KI auswählen" onClick={run((m) => m.SELECT.subject())}>Motiv auswählen</button>
+        <button className="qb primary" title="Hintergrund per KI entfernen (als Maske, jederzeit änderbar)" onClick={run((m) => m.L.removeBackground())}>Hintergrund entfernen</button>
+        <button className="qb" title="Motiv freistellen und als neue Ebene kopieren" onClick={run((m) => m.EDIT.subjectToLayer())}>Motiv → Ebene</button>
+        <button className="qb" title="Objekte übermalen, die verschwinden sollen" onClick={run((m) => m.setTool('heal', 'remove'))}>Objekt entfernen</button>
+      </>}
     </div>
   );
 }

@@ -1,21 +1,21 @@
-; Sakura Studio – Installer (installiert standardmäßig nach Desktop\Sakura Studio)
+; Lumora – Installer (installiert standardmäßig nach Desktop\Lumora)
 Unicode true
 SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 
-!define APP "Sakura Studio"
-!define VER "2.0.0"
-!define EXE "Sakura Studio.exe"
-!define UNKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SakuraStudio"
+!define APP "Lumora"
+!define VER "3.0.0"
+!define EXE "Lumora.exe"
+!define UNKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Lumora"
 
 Name "${APP}"
-OutFile "..\release\Sakura-Studio-Setup-${VER}.exe"
+OutFile "..\release\Lumora-Setup-${VER}.exe"
 InstallDir "$DESKTOP\${APP}"
-InstallDirRegKey HKCU "Software\SakuraStudio" "InstallDir"
+InstallDirRegKey HKCU "Software\Lumora" "InstallDir"
 RequestExecutionLevel user
 BrandingText "${APP} ${VER}"
 
-VIProductVersion "2.0.0.0"
+VIProductVersion "3.0.0.0"
 VIAddVersionKey /LANG=1031 "ProductName" "${APP}"
 VIAddVersionKey /LANG=1031 "FileDescription" "${APP} Setup"
 VIAddVersionKey /LANG=1031 "FileVersion" "${VER}"
@@ -26,7 +26,7 @@ VIAddVersionKey /LANG=1031 "LegalCopyright" "© 2026 ${APP}"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEFINISHPAGE_BITMAP "wizard.bmp"
 !define MUI_WELCOMEPAGE_TITLE "Willkommen bei ${APP}"
-!define MUI_WELCOMEPAGE_TEXT "Dieser Assistent installiert ${APP} – deine eigene Bildbearbeitung im Sakura-Design.$\r$\n$\r$\nStandardmäßig wird ein neuer Ordner „${APP}“ auf deinem Desktop angelegt. Darin liegen das Programm (${EXE}) und der Unterordner „Projekte“ für deine Arbeiten.$\r$\n$\r$\nKlicke auf „Weiter“, um fortzufahren."
+!define MUI_WELCOMEPAGE_TEXT "Dieser Assistent installiert ${APP} – die Bildbearbeitung für Profis und Einsteiger.$\r$\n$\r$\nStandardmäßig wird ein neuer Ordner „${APP}“ auf deinem Desktop angelegt. Darin liegen das Programm (${EXE}) und der Unterordner „Projekte“ für deine Arbeiten.$\r$\n$\r$\nKlicke auf „Weiter“, um fortzufahren."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "${APP} jetzt starten (mit Tutorial)"
 
@@ -47,7 +47,7 @@ Section "Install"
   CreateDirectory "$SMPROGRAMS\${APP}"
   CreateShortcut "$SMPROGRAMS\${APP}\${APP}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\${EXE}" 0
   CreateShortcut "$SMPROGRAMS\${APP}\${APP} deinstallieren.lnk" "$INSTDIR\Deinstallieren.exe"
-  WriteRegStr HKCU "Software\SakuraStudio" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "Software\Lumora" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${UNKEY}" "DisplayName" "${APP}"
   WriteRegStr HKCU "${UNKEY}" "DisplayVersion" "${VER}"
   WriteRegStr HKCU "${UNKEY}" "Publisher" "${APP}"
@@ -56,11 +56,11 @@ Section "Install"
   WriteRegStr HKCU "${UNKEY}" "UninstallString" '"$INSTDIR\Deinstallieren.exe"'
   WriteRegDWORD HKCU "${UNKEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNKEY}" "NoRepair" 1
-  ; Dateizuordnung .sakura
-  WriteRegStr HKCU "Software\Classes\.sakura" "" "SakuraStudio.Projekt"
-  WriteRegStr HKCU "Software\Classes\SakuraStudio.Projekt" "" "Sakura Studio Projekt"
-  WriteRegStr HKCU "Software\Classes\SakuraStudio.Projekt\DefaultIcon" "" "$INSTDIR\${EXE},0"
-  WriteRegStr HKCU "Software\Classes\SakuraStudio.Projekt\shell\open\command" "" '"$INSTDIR\${EXE}" "%1"'
+  ; Dateizuordnung .lumora
+  WriteRegStr HKCU "Software\Classes\.lumora" "" "Lumora.Projekt"
+  WriteRegStr HKCU "Software\Classes\Lumora.Projekt" "" "Lumora Projekt"
+  WriteRegStr HKCU "Software\Classes\Lumora.Projekt\DefaultIcon" "" "$INSTDIR\${EXE},0"
+  WriteRegStr HKCU "Software\Classes\Lumora.Projekt\shell\open\command" "" '"$INSTDIR\${EXE}" "%1"'
 SectionEnd
 
 Section "Uninstall"
@@ -72,7 +72,7 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\resources"
   RMDir "$INSTDIR"
   DeleteRegKey HKCU "${UNKEY}"
-  DeleteRegKey HKCU "Software\SakuraStudio"
-  DeleteRegKey HKCU "Software\Classes\SakuraStudio.Projekt"
-  DeleteRegKey HKCU "Software\Classes\.sakura"
+  DeleteRegKey HKCU "Software\Lumora"
+  DeleteRegKey HKCU "Software\Classes\Lumora.Projekt"
+  DeleteRegKey HKCU "Software\Classes\.lumora"
 SectionEnd

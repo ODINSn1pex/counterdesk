@@ -70,6 +70,8 @@ export class Doc {
     this.histIdx = -1;
     this.zoom = 1; this.panX = 0; this.panY = 0;
     this.paths = [];
+    this.artboards = []; // Zeichenflächen: { name, x, y, w, h, bg }
+    this.frames = [];    // Animation: { vis: {layerId: bool}, delay }
     this.activePath = -1;
     this.guides = [];
     this.alphaChannels = [];
@@ -139,6 +141,8 @@ export class Doc {
       w: this.w, h: this.h, active: this.active, layers,
       selection, selRev: this.selRev,
       paths: JSON.parse(JSON.stringify(this.paths)),
+      artboards: JSON.parse(JSON.stringify(this.artboards || [])),
+      frames: JSON.parse(JSON.stringify(this.frames || [])),
       alphaChannels: this.alphaChannels.map((a) => ({ name: a.name, canvas: a.canvas })),
     };
   }
@@ -169,6 +173,8 @@ export class Doc {
     this.selection = s.selection ? cloneCanvas(s.selection) : null;
     this.selRev = s.selRev;
     this.paths = JSON.parse(JSON.stringify(s.paths));
+    this.artboards = JSON.parse(JSON.stringify(s.artboards || []));
+    this.frames = JSON.parse(JSON.stringify(s.frames || []));
     this.alphaChannels = s.alphaChannels.map((a) => ({ ...a }));
     this.histIdx = idx;
     this.dirty = true;

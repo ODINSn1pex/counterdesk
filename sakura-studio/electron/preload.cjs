@@ -24,6 +24,11 @@ contextBridge.exposeInMainWorld('native', {
   aiModelRead: (f) => ipcRenderer.invoke('ai-model-read', f),
   aiModelExists: (f) => ipcRenderer.invoke('ai-model-exists', f),
   aiModelDownload: (f, url) => ipcRenderer.invoke('ai-model-download', f, url),
+  secretHas: (k) => ipcRenderer.invoke('secret-has', k),
+  secretSet: (k, v) => ipcRenderer.invoke('secret-set', k, v),
+  genfill: (o) => ipcRenderer.invoke('genfill', o),
+  pluginsList: () => ipcRenderer.invoke('plugins-list'),
+  pluginsOpen: () => ipcRenderer.invoke('plugins-open'),
   listDir: (dir) => ipcRenderer.invoke('list-dir', dir),
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch (e) { return null; } },
   on: (ch, fn) => {

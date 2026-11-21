@@ -1,16 +1,17 @@
-# Sakura Studio
+# Lumora
 
-Eigene Bildbearbeitung für Windows (Electron + React) im Sakura-Nacht-Design.
+Eigene Bildbearbeitung für Windows (Electron + React) im Themes Dunkel, Hell und Anime.
 
 ## Bauen
 ```bash
 npm install
+sh scripts/fetch-models.sh        # KI-Modelle (nicht im Repository)
 npm run build                     # Web-Bundle nach dist/
 npx electron-builder --win dir    # Programmordner release/win-unpacked
-cd installer && makensis sakura.nsi   # Installer -> release/Sakura-Studio-Setup-1.0.0.exe
+cd installer && makensis lumora.nsi   # Installer -> release/Lumora-Setup-3.0.0.exe
 ```
-Der Installer legt standardmäßig `Desktop\Sakura Studio` an (Programm + Unterordner `Projekte`),
-erstellt Desktop- und Startmenü-Verknüpfungen und verknüpft `.sakura`-Projektdateien.
+Der Installer legt standardmäßig `Desktop\Lumora` an (Programm + Unterordner `Projekte`),
+erstellt Desktop- und Startmenü-Verknüpfungen und verknüpft `.lumora`-Projektdateien.
 
 ## Aufbau
 - `electron/` – Hauptprozess (rahmenloses Fenster, Datei-Dialoge, Arbeitsordner auf dem Desktop)

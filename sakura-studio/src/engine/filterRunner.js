@@ -28,7 +28,8 @@ function runLocal(kind, fid, params, src) {
 
 // Liefert ein Canvas/ImageBitmap mit dem Ergebnis
 export async function runFilter(kind, fid, params, src, tag = 'apply') {
-  const w = getWorker();
+  // Plugin-Filter laufen im Hauptthread (Code ist im Worker nicht verfügbar)
+  const w = kind === 'filter' && FILTERS[fid] && FILTERS[fid].plugin ? null : getWorker();
   if (!w) return runLocal(kind, fid, params, src);
   const bitmap = await createImageBitmap(src);
   const id = seq++;

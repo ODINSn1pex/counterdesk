@@ -19,8 +19,8 @@ export default async function afterPack(context) {
   const vi = ResEdit.Resource.VersionInfo.fromEntries(res.entries);
   for (const v of vi) {
     const lang = { lang: 1033, codepage: 1200 };
-    v.setStringValues(lang, { FileDescription: 'Sakura Studio', ProductName: 'Sakura Studio', CompanyName: 'Sakura Studio', LegalCopyright: '© 2026 Sakura Studio', OriginalFilename: 'Sakura Studio.exe', InternalName: 'Sakura Studio' });
-    v.setFileVersion(2, 0, 0, 0, 1033); v.setProductVersion(2, 0, 0, 0, 1033);
+    v.setStringValues(lang, { FileDescription: 'Lumora', ProductName: 'Lumora', CompanyName: 'Lumora', LegalCopyright: '© 2026 Lumora', OriginalFilename: 'Lumora.exe', InternalName: 'Lumora' });
+    v.setFileVersion(3, 0, 0, 0, 1033); v.setProductVersion(3, 0, 0, 0, 1033);
     v.outputToResourceEntries(res.entries);
   }
   res.outputResource(pe);

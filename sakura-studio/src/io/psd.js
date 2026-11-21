@@ -17,7 +17,7 @@ fromAg['pin light'] = 'hard-light'; fromAg['hard mix'] = 'hard-light'; fromAg['s
 const rgbOf = (c) => (c && c.r != null ? rgbToHex(c.r, c.g, c.b) : '#000000');
 const colOf = (hex) => { const { r, g, b } = hexToRgb(hex); return { r, g, b }; };
 
-// ---------- Einstellungsebenen: PSD ↔ Sakura ----------
+// ---------- Einstellungsebenen: PSD ↔ Lumora ----------
 function adjFromPsd(a) {
   if (!a) return null;
   const P = (id) => Object.fromEntries(ADJUSTMENTS[id].params.map((p) => [p.key, p.def]));

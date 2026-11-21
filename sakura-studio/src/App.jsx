@@ -8,6 +8,7 @@ import { RightPanels, SideStrip, Flyout } from './ui/Panels.jsx';
 import { Dialogs } from './ui/Dialogs.jsx';
 import { Tutorial } from './ui/Tutorial.jsx';
 import { Welcome } from './ui/Welcome.jsx';
+import { Timeline } from './ui/Timeline.jsx';
 
 // Fängt Darstellungsfehler ab, damit nie ein leeres Fenster bleibt
 class ErrorBoundary extends Component {
@@ -51,6 +52,7 @@ function Shell() {
         <div className="center">
           <DocTabs />
           {hasDoc ? <CanvasView /> : (S.prefs.showWelcome !== false ? <Welcome /> : <div className="empty-center"><p>Kein Dokument geöffnet</p><p className="muted">Strg+N: Neu · Strg+O: Öffnen · oder Datei hierher ziehen</p></div>)}
+          <Timeline />
           <StatusBar />
         </div>
         {!hide && <>
@@ -71,6 +73,7 @@ export default function App() {
   useEffect(() => {
     applyTheme();
     import('./tools.js').then((m) => m.loadCustomTips());
+    import('./plugins.js').then((m) => m.loadPlugins());
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     const closeMenus = () => { if (S.ui.menu) { S.ui.menu = null; emit(); } };

@@ -21,7 +21,7 @@ export { LS };
 export const DEFAULT_GRADIENTS = [
   { name: 'Vordergrund → Hintergrund', fgbg: true, stops: [] },
   { name: 'Vordergrund → Transparent', fgt: true, stops: [] },
-  { name: 'Sakura', stops: [{ p: 0, c: '#ffd6ec' }, { p: 0.5, c: '#e57fb8' }, { p: 1, c: '#6a3fa0' }] },
+  { name: 'Pastell', stops: [{ p: 0, c: '#ffd6ec' }, { p: 0.5, c: '#e57fb8' }, { p: 1, c: '#6a3fa0' }] },
   { name: 'Mondnacht', stops: [{ p: 0, c: '#0f0c29' }, { p: 0.55, c: '#302b63' }, { p: 1, c: '#b48ad6' }] },
   { name: 'Laterne', stops: [{ p: 0, c: '#fff1c1' }, { p: 0.5, c: '#ffb86b' }, { p: 1, c: '#c2410c' }] },
   { name: 'Regenbogen', stops: [{ p: 0, c: '#ff0000' }, { p: 0.17, c: '#ff9900' }, { p: 0.33, c: '#ffee00' }, { p: 0.5, c: '#22cc44' }, { p: 0.67, c: '#2288ff' }, { p: 0.83, c: '#6633cc' }, { p: 1, c: '#cc33aa' }] },
@@ -48,7 +48,7 @@ export const DEFAULT_PREFS = {
   wheelZoom: false, animatedZoom: true, brushCursor: 'normal', pressureSize: true, pressureOpacity: false,
   proportionalTransform: true, nudgeStep: 10, snapDistance: 6,
   // Leistung
-  fastPreview: true, hardwareAcceleration: true, aiModel: 'isnet-anime',
+  fastPreview: true, hardwareAcceleration: true, aiModel: 'isnet-anime', quickBar: true,
   // Transparenz & Raster
   checker: 'medium', checkerTone: 'light', gridSpacing: 50, gridSub: 4, gridColor: '#ff9ad5', guideColor: '#3ce0ff', pixelGrid: true,
   // Einheiten
@@ -226,9 +226,9 @@ export function closeDoc(id, force = false) {
 
 // ---------------- Datei-IO ----------------
 const IMG_FILTERS = [
-  { name: 'Alle unterstützten', extensions: ['sakura', 'psd', 'psb', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif', 'cr2', 'cr3', 'nef', 'arw', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw'] },
+  { name: 'Alle unterstützten', extensions: ['lumora', 'sakura', 'psd', 'psb', 'tif', 'tiff', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif', 'cr2', 'cr3', 'nef', 'arw', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw'] },
   { name: 'Kamera-RAW (Vorschau)', extensions: ['cr2', 'cr3', 'nef', 'nrw', 'arw', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw'] },
-  { name: 'Sakura-Projekt', extensions: ['sakura'] },
+  { name: 'Lumora-Projekt', extensions: ['lumora', 'sakura'] },
   { name: 'Photoshop-Datei (PSD)', extensions: ['psd'] },
   { name: 'Bilder', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif'] },
 ];
@@ -270,12 +270,19 @@ function addRecent(p) {
   LS.set('recent', S.recent);
 }
 
-export async function openBytes(name, bytes, path) {
+export async function openBytes(name, bytes, path, opts = {}) {
   const ext = name.split('.').pop().toLowerCase();
   try {
     let d;
-    if (ext === 'sakura') d = await loadProject(new TextDecoder().decode(bytes), name);
+    if (ext === 'lumora' || ext === 'sakura') d = await loadProject(new TextDecoder().decode(bytes), name);
+    else if (ext === 'tif' || ext === 'tiff') { const { readTiff } = await import('./io/tiff.js'); d = docFromImage(readTiff(bytes), name); }
     else if (ext === 'psd' || ext === 'psb') d = readPsd(bytes, name.replace(/\.ps[db]$/i, ''));
+    else if (RAW_EXT.includes(ext) && !opts.previewOnly) {
+      // Echte RAW-Entwicklung im Dialog; eingebettete Vorschau als Ausweichlösung
+      S.ui.dialog = { type: 'raw', name, bytes, fallback: () => openBytes(name, bytes, path, { previewOnly: true }) };
+      emit();
+      return;
+    }
     else if (RAW_EXT.includes(ext)) {
       const jpg = extractRawPreview(bytes);
       if (!jpg) throw new Error('Keine eingebettete Vorschau in der RAW-Datei gefunden');
@@ -291,7 +298,7 @@ export async function openBytes(name, bytes, path) {
       d = docFromImage(img, name);
       URL.revokeObjectURL(url);
     }
-    d.filePath = path && /\.(sakura|psd)$/i.test(path) ? path : null;
+    d.filePath = path && /\.(lumora|sakura|psd)$/i.test(path) ? path : null;
     if (path) addRecent(path);
     addDoc(d);
     toast(`„${name}“ geöffnet`);
@@ -317,7 +324,7 @@ function pickFileBrowser(accept, multi) {
 export async function openFile() {
   let files;
   if (window.native) files = await window.native.openDialog({ title: 'Öffnen', filters: IMG_FILTERS, multi: true, defaultPath: S.prefs.saveDir || undefined });
-  else files = await pickFileBrowser('.sakura,.psd,image/*', true);
+  else files = await pickFileBrowser('.lumora,.sakura,.psd,image/*', true);
   for (const f of files) await openBytes(f.name, new Uint8Array(f.data), f.path);
 }
 
@@ -350,6 +357,8 @@ export function placeImage(img, name = 'Platziert') {
   commit('Platzieren');
 }
 
+export function saveBytesPublic(name, bytes, filters) { return saveBytes(name, bytes, filters).then((p) => { if (p) toast('Gespeichert: ' + String(p).split(/[\\/]/).pop()); return p; }); }
+
 async function saveBytes(name, bytes, filters, existingPath) {
   if (window.native) {
     const p = existingPath || await window.native.saveDialog({ name, filters, dir: S.prefs.saveDir || undefined });
@@ -370,7 +379,7 @@ export async function saveProject(saveAs = false) {
   if (isPsd && !saveAs) return exportPsd(d.filePath);
   const json = await serializeProject(d);
   const base = d.name.replace(/\.[^.]+$/, '');
-  const p = await saveBytes(base + '.sakura', new TextEncoder().encode(json), [{ name: 'Sakura-Projekt', extensions: ['sakura'] }], saveAs ? null : d.filePath);
+  const p = await saveBytes(base + '.lumora', new TextEncoder().encode(json), [{ name: 'Lumora-Projekt', extensions: ['lumora'] }], saveAs ? null : d.filePath);
   if (!p) return;
   d.filePath = p;
   d.name = p.split(/[\\/]/).pop();
@@ -392,6 +401,14 @@ export async function exportPsd(path) {
   if (path) d.dirty = false;
   toast('PSD gespeichert: ' + p.split(/[\\/]/).pop());
   emit();
+}
+
+export async function exportTiff(cmyk = true, inkLimit = 300) {
+  const d = doc(); if (!d) return;
+  const { writeTiff } = await import('./io/tiff.js');
+  const bytes = writeTiff(flattenToCanvas(d, '#ffffff'), { cmyk, inkLimit, ppi: d.ppi });
+  const p = await saveBytes(d.name.replace(/\.[^.]+$/, '') + (cmyk ? '_CMYK' : '') + '.tif', bytes, [{ name: 'TIFF', extensions: ['tif', 'tiff'] }]);
+  if (p) toast(cmyk ? 'CMYK-TIFF exportiert (Farbauftrag max. ' + inkLimit + ' %)' : 'TIFF exportiert');
 }
 
 export async function exportImage(fmt = 'png', quality = 0.92, scale = 1, transparent = true) {
@@ -435,8 +452,8 @@ export async function exportLayers() {
 export async function serializeProject(d) {
   const toUrl = (c) => c.toDataURL('image/png');
   return JSON.stringify({
-    app: 'Sakura Studio', version: 1, w: d.w, h: d.h, name: d.name, active: d.active, ppi: d.ppi,
-    guides: d.guides, paths: d.paths,
+    app: 'Lumora', version: 1, w: d.w, h: d.h, name: d.name, active: d.active, ppi: d.ppi,
+    guides: d.guides, paths: d.paths, artboards: d.artboards || [], frames: d.frames || [],
     layers: d.layers.map((l) => {
       const props = layerProps(l);
       const smartSrc = props.smart ? toUrl(props.smart.src) : null;
@@ -453,6 +470,7 @@ async function loadProject(text, name) {
   d.ppi = j.ppi || 72;
   d.guides = j.guides || [];
   d.paths = j.paths || [];
+  d.artboards = j.artboards || [];
   const idMap = new Map();
   for (const e of j.layers) {
     const l = new Layer(j.w, j.h);
@@ -466,6 +484,7 @@ async function loadProject(text, name) {
   }
   // Gruppen-Verweise auf neue IDs umstellen
   d.layers.forEach((l) => { if (l.parent != null) l.parent = idMap.get(l.parent) ?? null; });
+  d.frames = (j.frames || []).map((f) => ({ delay: f.delay, vis: Object.fromEntries(Object.entries(f.vis || {}).map(([k, v]) => [idMap.get(Number(k)) ?? k, v])) }));
   d.layers = normalizeTree(d.layers);
   for (const a of j.alpha || []) { const c = makeCanvas(j.w, j.h); ctx2d(c).drawImage(await loadImage(a.png), 0, 0); d.alphaChannels.push({ name: a.name, canvas: c }); }
   d.active = Math.min(j.active || 0, d.layers.length - 1);
@@ -981,7 +1000,7 @@ export const EDIT = {
     const sel = selectionOrAll(d);
     const c = makeCanvas(d.w, d.h); const x = ctx2d(c);
     if (source === 'pattern') x.fillStyle = x.createPattern(patternCanvas(S.fill.pattern), 'repeat');
-    else if (source === 'content') { contentAwareFill(d, l, sel); commit('Inhaltsbasierte Füllung'); return; }
+    else if (source === 'content') { EDIT.remove(); return; }
     else x.fillStyle = { fg: S.fg, bg: S.bg, black: '#000', white: '#fff', gray: '#808080', color: color || S.fg }[source] || S.fg;
     x.fillRect(0, 0, d.w, d.h);
     x.globalCompositeOperation = 'destination-in'; x.drawImage(sel, 0, 0);
@@ -1002,6 +1021,38 @@ export const EDIT = {
     commit('Kontur füllen');
   },
   defineBrushPreset: () => toast('Pinselvorgabe gespeichert'),
+  // Markierten Bereich aus dem Bild entfernen und mit passendem Inhalt füllen (KI, Fallback: klassisch)
+  remove: async (maskCanvas) => {
+    const d = doc(); if (!d) return;
+    const l = d.layer; if (!canEditPixels(l)) return;
+    const mask = maskCanvas || d.selection;
+    if (!mask) { toast('Markiere zuerst den Bereich, der verschwinden soll (z. B. mit dem Lasso L)'); return; }
+    // Auswahl leicht erweitern, damit Kanten und Schatten mit verschwinden
+    const m = SEL.expand(mask, 4);
+    S.ui.busy = 'KI entfernt Bereich'; emit();
+    try {
+      const { aiInpaint } = await import('./engine/ai.js');
+      const res = await aiInpaint(l.canvas, m);
+      const x = l.ctx; x.clearRect(0, 0, d.w, d.h); x.drawImage(res, 0, 0); l.touch();
+      if (!maskCanvas) d.deselect();
+      commit('Entfernen (KI)');
+    } catch (e) {
+      console.warn('KI-Entfernen nicht verfügbar, klassisches Verfahren', e);
+      contentAwareFill(d, l, m);
+      if (!maskCanvas) d.deselect();
+      commit('Entfernen');
+    }
+    S.ui.busy = null; emit(); view.request();
+  },
+  // Auswahl in eigene Ebene ausschneiden bzw. kopieren
+  cutToLayer: () => L.viaCopy(true),
+  copyToLayer: () => L.viaCopy(false),
+  // Motiv freistellen und als neue Ebene (Hintergrund bleibt erhalten)
+  subjectToLayer: async () => {
+    const d = doc(); if (!d) return;
+    await SELECT.subject();
+    if (d.selection) L.viaCopy(false);
+  },
 };
 
 function clearArea(d) {
@@ -1364,7 +1415,8 @@ export const ACCENTS = {
   teal: ['#2dd4bf', '#7ee8db', '#159e8e'], orange: ['#ff9f43', '#ffc58a', '#d9771e'], green: ['#4ade80', '#93f0b5', '#22a35a'], red: ['#ff6b81', '#ffa3b0', '#d93a52'],
 };
 export function resolvedTheme() {
-  const t = S.prefs.theme || 'dark';
+  let t = S.prefs.theme || 'dark';
+  if (t === 'anime-day') t = 'anime';
   if (t === 'system') return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   return t;
 }
@@ -1393,13 +1445,13 @@ export async function autosaveAll() {
     if (!d.dirty || d.autosavedRev === d.histIdx + ':' + d.history.length) continue;
     try {
       const json = await serializeProject(d);
-      await window.native.recoveryWrite('doc-' + d.id + '.sakura', new TextEncoder().encode(JSON.stringify({ name: d.name, filePath: d.filePath, time: Date.now(), project: json })));
+      await window.native.recoveryWrite('doc-' + d.id + '.lumora', new TextEncoder().encode(JSON.stringify({ name: d.name, filePath: d.filePath, time: Date.now(), project: json })));
       d.autosavedRev = d.histIdx + ':' + d.history.length;
     } catch (e) { console.warn('Autosave fehlgeschlagen', e); }
   }
 }
 export function clearRecovery(d) {
-  if (window.native && window.native.recoveryDelete) window.native.recoveryDelete('doc-' + d.id + '.sakura');
+  if (window.native && window.native.recoveryDelete) window.native.recoveryDelete('doc-' + d.id + '.lumora');
 }
 export async function restoreRecovery(items) {
   for (const it of items) {
@@ -1441,3 +1493,47 @@ for (const [ns, obj] of Object.entries({ IMAGE, L, SELECT, EDIT })) {
     };
   }
 }
+
+
+// ---------------- Zeichenflächen ----------------
+export const ARTBOARD_PRESETS = [['Instagram-Beitrag', 1080, 1080], ['Instagram-Story', 1080, 1920], ['Full HD', 1920, 1080], ['YouTube-Thumbnail', 1280, 720], ['A4 (150 ppi)', 1240, 1754], ['iPhone', 1179, 2556], ['Web-Banner', 728, 90], ['Eigene Größe', 800, 600]];
+export const ARTBOARDS = {
+  // Neue Zeichenfläche rechts neben den bestehenden; Arbeitsfläche wächst automatisch mit
+  add: (name, w, h, bg = '#ffffff', rect) => {
+    const d = doc(); if (!d) return;
+    d.artboards = d.artboards || [];
+    let r = rect;
+    if (!r) {
+      const right = d.artboards.reduce((m, a) => Math.max(m, a.x + a.w), 0);
+      r = d.artboards.length ? { x: right + 80, y: 0, w, h } : { x: 0, y: 0, w, h };
+    }
+    const needW = Math.max(d.w, Math.round(r.x + r.w)), needH = Math.max(d.h, Math.round(r.y + r.h));
+    if (needW > d.w || needH > d.h) IMAGE.canvasSize(needW, needH, 0, 0, 'rgba(0,0,0,0)');
+    const ab = { name: name || `Zeichenfläche ${d.artboards.length + 1}`, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h), bg };
+    d.artboards.push(ab);
+    // Hintergrund der Zeichenfläche als eigene Ebene ganz unten
+    if (bg && bg !== 'transparent') {
+      const l = new Layer(d.w, d.h, ab.name + ' – Hintergrund');
+      l.ctx.fillStyle = bg; l.ctx.fillRect(ab.x, ab.y, ab.w, ab.h);
+      d.layers.unshift(l); d.layers = normalizeTree(d.layers); d.active = Math.min(d.active + 1, d.layers.length - 1);
+    }
+    view.request(); commit('Zeichenfläche');
+  },
+  remove: (i) => { const d = doc(); if (!d || !d.artboards[i]) return; d.artboards.splice(i, 1); view.request(); commit('Zeichenfläche löschen'); },
+  rename: (i, n) => { const d = doc(); d.artboards[i].name = n; commit('Zeichenfläche umbenennen'); },
+  exportAll: async (fmt = 'png') => {
+    const d = doc(); if (!d || !d.artboards.length) { toast('Keine Zeichenflächen vorhanden'); return; }
+    const full = flattenToCanvas(d, fmt === 'jpeg' ? '#ffffff' : null);
+    const mime = fmt === 'jpeg' ? 'image/jpeg' : fmt === 'webp' ? 'image/webp' : 'image/png', ext = fmt === 'jpeg' ? 'jpg' : fmt;
+    const safe = (n) => n.replace(/[\\/:*?"<>|]/g, '_');
+    let dir = null;
+    if (window.native) { dir = await window.native.chooseFolder({ title: 'Zielordner für Zeichenflächen' }); if (!dir) return; }
+    for (const ab of d.artboards) {
+      const c = makeCanvas(ab.w, ab.h); ctx2d(c).drawImage(full, -ab.x, -ab.y);
+      const bytes = await canvasToBytes(c, mime, 0.92);
+      if (dir) await window.native.writeFileIn(dir, `${safe(ab.name)}.${ext}`, bytes);
+      else await saveBytes(`${safe(ab.name)}.${ext}`, bytes, [{ name: ext.toUpperCase(), extensions: [ext] }]);
+    }
+    toast(`${d.artboards.length} Zeichenflächen exportiert`);
+  },
+};

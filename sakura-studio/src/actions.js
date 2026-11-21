@@ -22,7 +22,7 @@ export function stepLabel(st) {
 const DEFAULT_ACTIONS = [
   { name: 'Schwarzweiß-Look', steps: [{ type: 'filter', kind: 'adjust', id: 'blackWhite', params: { reds: 40, yellows: 60, greens: 40, cyans: 60, blues: 20, magentas: 80, tint: false, tintColor: '#c9a27a' }, name: 'Schwarzweiß' }, { type: 'filter', kind: 'filter', id: 'vignette', params: { amount: 45, size: 60 }, name: 'Vignette' }] },
   { name: 'Für Web schärfen', steps: [{ type: 'filter', kind: 'filter', id: 'unsharp', params: { amount: 80, radius: 1, threshold: 2 }, name: 'Unscharf maskieren' }] },
-  { name: 'Sakura-Farblook', steps: [{ type: 'filter', kind: 'adjust', id: 'gradientMap', params: { c1: '#2a1846', c2: '#c85fa0', c3: '#ffe6f4', reverse: false }, name: 'Verlaufsumsetzung' }] },
+  { name: 'Pastell-Farblook', steps: [{ type: 'filter', kind: 'adjust', id: 'gradientMap', params: { c1: '#2a1846', c2: '#c85fa0', c3: '#ffe6f4', reverse: false }, name: 'Verlaufsumsetzung' }] },
 ];
 S.actions = LS.get('actions', null) || DEFAULT_ACTIONS;
 export function saveActions() { LS.set('actions', S.actions); emit(); }

@@ -1,5 +1,5 @@
-// Sakura Studio – Electron Hauptprozess
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, protocol, net } = require('electron');
+// Lumora – Electron Hauptprozess
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, protocol, net, safeStorage } = require('electron');
 const { pathToFileURL } = require('url');
 const path = require('path');
 const fs = require('fs');
@@ -36,11 +36,11 @@ function registerAppProtocol() {
 
 let win = null;
 let allowClose = false;
-let pendingOpenPath = process.argv.find((a) => /\.(sakura|psd|png|jpe?g|webp|gif|bmp)$/i.test(a)) || null;
+let pendingOpenPath = process.argv.find((a) => /\.(lumora|sakura|psd|png|jpe?g|webp|gif|bmp)$/i.test(a)) || null;
 
 function workFolder() {
-  // Arbeitsordner auf dem Desktop: Desktop\Sakura Studio\Projekte
-  const dir = path.join(app.getPath('desktop'), 'Sakura Studio', 'Projekte');
+  // Arbeitsordner auf dem Desktop: Desktop\Lumora\Projekte
+  const dir = path.join(app.getPath('desktop'), 'Lumora', 'Projekte');
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* ignore */ }
   return dir;
 }
@@ -53,7 +53,7 @@ function createWindow() {
     minHeight: 680,
     frame: false,
     backgroundColor: '#1b1730',
-    title: 'Sakura Studio',
+    title: 'Lumora',
     icon: path.join(__dirname, '..', 'dist', 'icon.png'),
     show: false,
     webPreferences: {
@@ -82,7 +82,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', (_e, argv) => {
-    const f = argv.find((a) => /\.(sakura|psd|png|jpe?g|webp|gif|bmp)$/i.test(a));
+    const f = argv.find((a) => /\.(lumora|sakura|psd|png|jpe?g|webp|gif|bmp)$/i.test(a));
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
@@ -153,7 +153,7 @@ ipcMain.handle('write-file-in', (_e, dir, name, data) => {
 ipcMain.handle('recovery-write', (_e, name, data) => { fs.writeFileSync(path.join(recoveryDir(), safeName(name)), Buffer.from(data)); return true; });
 ipcMain.handle('recovery-delete', (_e, name) => { try { fs.unlinkSync(path.join(recoveryDir(), safeName(name))); } catch (e) { /* nicht vorhanden */ } return true; });
 ipcMain.handle('recovery-list', () => {
-  try { return fs.readdirSync(recoveryDir()).filter((f) => f.endsWith('.sakura')).map((f) => ({ name: f, data: fs.readFileSync(path.join(recoveryDir(), f)) })); } catch (e) { return []; }
+  try { return fs.readdirSync(recoveryDir()).filter((f) => (f.endsWith('.lumora') || f.endsWith('.sakura'))).map((f) => ({ name: f, data: fs.readFileSync(path.join(recoveryDir(), f)) })); } catch (e) { return []; }
 });
 ipcMain.handle('recovery-clear', () => { try { for (const f of fs.readdirSync(recoveryDir())) fs.unlinkSync(path.join(recoveryDir(), f)); } catch (e) { /* */ } return true; });
 ipcMain.handle('set-main-setting', (_e, key, value) => {
@@ -189,9 +189,75 @@ ipcMain.handle('ai-model-download', async (e, file, url) => {
   return true;
 });
 
+// ---- Geheimnisse (API-Schlüssel) verschlüsselt speichern ----
+const secretFile = () => path.join(app.getPath('userData'), 'secrets.bin');
+function readSecrets() {
+  try {
+    const raw = fs.readFileSync(secretFile());
+    const txt = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString('utf8');
+    return JSON.parse(txt);
+  } catch (e) { return {}; }
+}
+function writeSecrets(o) {
+  const txt = JSON.stringify(o);
+  fs.writeFileSync(secretFile(), safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(txt) : Buffer.from(txt));
+}
+ipcMain.handle('secret-has', (_e, k) => !!readSecrets()[k]);
+ipcMain.handle('secret-set', (_e, k, v) => { const s = readSecrets(); if (v) s[k] = v; else delete s[k]; writeSecrets(s); return true; });
+
+// ---- Generative Füllung über die OpenAI-Bild-API (eigener Schlüssel des Nutzers) ----
+ipcMain.handle('genfill', async (_e, { prompt, image, mask, size }) => {
+  const key = readSecrets().openai;
+  if (!key) throw new Error('Kein API-Schlüssel hinterlegt');
+  const fd = new FormData();
+  fd.append('model', 'gpt-image-1');
+  fd.append('prompt', prompt);
+  fd.append('size', size || '1024x1024');
+  fd.append('n', '1');
+  fd.append('image', new Blob([Buffer.from(image)], { type: 'image/png' }), 'image.png');
+  fd.append('mask', new Blob([Buffer.from(mask)], { type: 'image/png' }), 'mask.png');
+  const res = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: fd });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + res.status));
+  const b64 = j.data && j.data[0] && j.data[0].b64_json;
+  if (!b64) throw new Error('Keine Bilddaten in der Antwort');
+  return Buffer.from(b64, 'base64');
+});
+
+// ---- Plugins: JavaScript-Dateien im Benutzerordner ----
+const pluginsDir = () => { const d = path.join(app.getPath('userData'), 'plugins'); fs.mkdirSync(d, { recursive: true }); return d; };
+const SAMPLE_PLUGIN = `// Beispiel-Plugin für Lumora: fügt einen Sepia-Filter und einen Befehl hinzu.
+// Plugins liegen in diesem Ordner; nach Änderungen: Hilfe › Plugins neu laden.
+lumora.registerFilter({
+  id: 'sepia', name: 'Sepia…',
+  params: [{ key: 'amount', label: 'Stärke %', min: 0, max: 100, def: 80 }],
+  apply(canvas, p) {
+    const out = lumora.makeCanvas(canvas.width, canvas.height);
+    const x = out.getContext('2d'); x.drawImage(canvas, 0, 0);
+    const id = x.getImageData(0, 0, out.width, out.height), d = id.data, k = p.amount / 100;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      d[i] = r + (Math.min(255, r * .393 + g * .769 + b * .189) - r) * k;
+      d[i + 1] = g + (Math.min(255, r * .349 + g * .686 + b * .168) - g) * k;
+      d[i + 2] = b + (Math.min(255, r * .272 + g * .534 + b * .131) - b) * k;
+    }
+    x.putImageData(id, 0, 0);
+    return out;
+  },
+});
+lumora.registerCommand({ label: 'Dokumentinfo anzeigen', run() { const d = lumora.document(); lumora.toast(d ? d.name + ': ' + d.w + ' × ' + d.h + ' Px, ' + d.layers.length + ' Ebenen' : 'Kein Dokument'); } });
+`;
+ipcMain.handle('plugins-list', () => {
+  const dir = pluginsDir();
+  const marker = path.join(dir, '.beispiel-angelegt');
+  if (!fs.existsSync(marker)) { fs.writeFileSync(path.join(dir, 'beispiel-sepia.js'), SAMPLE_PLUGIN); fs.writeFileSync(marker, '1'); }
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.js')).map((f) => ({ name: f, code: fs.readFileSync(path.join(dir, f), 'utf8') }));
+});
+ipcMain.handle('plugins-open', () => shell.openPath(pluginsDir()));
+
 ipcMain.handle('list-dir', (_e, dir) => {
   try {
-    return fs.readdirSync(dir).filter((f) => /\.(png|jpe?g|webp|gif|bmp|psd|sakura|tiff?)$/i.test(f)).map((f) => ({ name: f, path: path.join(dir, f) }));
+    return fs.readdirSync(dir).filter((f) => /\.(png|jpe?g|webp|gif|bmp|psd|lumora|sakura|tiff?)$/i.test(f)).map((f) => ({ name: f, path: path.join(dir, f) }));
   } catch (e) { return []; }
 });
 

@@ -121,10 +121,16 @@ export function Blossom({ size = 22, color = '#f2a6cf', className = '', style })
   );
 }
 
+// App-Logo: neutrale Blende, im Anime-Theme Kirschblüte
 export function Logo({ size = 30 }) {
   return (
     <div className="logo" style={{ width: size, height: size }}>
-      <Blossom size={size * 0.8} color="#fff" />
+      <svg className="logo-neutral" width={size * 0.72} height={size * 0.72} viewBox="-12 -12 24 24" aria-hidden="true">
+        <circle r="8.6" fill="none" stroke="#fff" strokeWidth="1.8" />
+        {[0, 60, 120, 180, 240, 300].map((a) => <line key={a} transform={`rotate(${a})`} x1="8.4" y1="0" x2="-1.5" y2="3.4" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" opacity="0.92" />)}
+        <circle r="2" fill="#fff" />
+      </svg>
+      <span className="logo-anime"><Blossom size={size * 0.8} color="#fff" /></span>
     </div>
   );
 }

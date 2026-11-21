@@ -6,7 +6,8 @@ import {
 } from './state.js';
 import { ADJUSTMENTS, FILTERS } from './engine/filters.js';
 import { PATHS, alignLayer, nudge, cancelOp, finishPoly, finishPath, textOnPath, definePresetFromSelection, makeTipFromCanvas } from './tools.js';
-import { ADJ_LAYER_TYPES } from './state.js';
+import { ADJ_LAYER_TYPES, ARTBOARDS } from './state.js';
+import { PLUGIN_COMMANDS, PLUGIN_FILTERS, PLUGIN_ERRORS, loadPlugins } from './plugins.js';
 
 const hasDoc = () => !!doc();
 const hasSel = () => !!(doc() && doc().selection);
@@ -48,6 +49,9 @@ export const MENUS = [
         { label: () => `Schnell-Export als ${({ png: 'PNG', jpeg: 'JPG', webp: 'WebP' })[S.prefs.exportFormat] || 'PNG'}`, key: 'Umschalt+Strg+Alt+W', run: () => exportImage(S.prefs.exportFormat || 'png', (S.prefs.jpgQuality || 90) / 100), enabled: hasDoc },
         { label: 'Exportieren als…', key: 'Alt+Strg+Umschalt+E', run: () => openDialog('export'), enabled: hasDoc },
         { label: 'Ebenen in Dateien exportieren…', run: exportLayers, enabled: hasDoc },
+        { label: 'Animation (GIF/Video)…', run: () => openDialog('animExport'), enabled: () => doc() && (doc().frames || []).length > 0 },
+        { label: 'Als CMYK-TIFF für den Druck…', run: () => import('./state.js').then((m) => m.exportTiff(true, 300)), enabled: hasDoc },
+        { label: 'Zeichenflächen als Dateien…', run: () => ARTBOARDS.exportAll('png'), enabled: () => doc() && (doc().artboards || []).length > 0 },
       ] },
       { label: 'Platzieren…', run: placeFile, enabled: hasDoc },
       '-',
@@ -68,10 +72,13 @@ export const MENUS = [
       { label: 'Einfügen', key: 'Strg+V', run: () => EDIT.paste(false), enabled: hasDoc },
       { label: 'An Originalposition einfügen', key: 'Umschalt+Strg+V', run: () => EDIT.paste(true), enabled: hasDoc },
       { label: 'Löschen', key: 'Entf', run: EDIT.clear, enabled: hasDoc },
+      { label: 'Auswahl entfernen (KI-Füllung)', key: 'Umschalt+Strg+Entf', run: () => EDIT.remove(), enabled: hasSel },
+      { label: 'Ausschneiden in neue Ebene', run: EDIT.cutToLayer, enabled: hasSel },
       '-',
       { label: 'Fläche füllen…', key: 'Umschalt+F5', run: () => openDialog('fill'), enabled: hasDoc },
       { label: 'Kontur füllen…', run: () => openDialog('stroke'), enabled: hasSel },
       { label: 'Inhaltsbasierte Füllung', run: () => EDIT.fill('content'), enabled: hasSel },
+      { label: 'Generative Füllung (KI, online)…', run: () => openDialog('genfill'), enabled: hasSel },
       '-',
       { label: 'Frei transformieren', key: 'Strg+T', run: () => startTransform(), enabled: hasDoc },
       { label: 'Transformieren', sub: [
@@ -94,6 +101,7 @@ export const MENUS = [
       '-',
       { label: 'Pinselvorgabe festlegen (aus Auswahl)…', run: definePresetFromSelection, enabled: hasDoc },
       { label: 'Pinselspitze aus Bild importieren…', run: importBrushImage },
+      { label: 'Photoshop-Pinsel importieren (.abr)…', run: importAbr },
       { label: 'Farbfelder & Verläufe zurücksetzen', run: () => { localStorage.removeItem('sakura.swatches'); localStorage.removeItem('sakura.gradients'); toast('Wird beim nächsten Start zurückgesetzt'); } },
       { label: 'Tastaturbefehle…', key: 'Alt+Umschalt+Strg+K', run: () => openDialog('shortcuts') },
       { label: 'Voreinstellungen…', key: 'Strg+K', run: () => openDialog('prefs') },
@@ -143,6 +151,7 @@ export const MENUS = [
       { label: 'Neu', sub: [
         { label: 'Ebene…', key: 'Umschalt+Strg+N', run: L.add, enabled: hasDoc },
         { label: 'Gruppe', run: L.newGroup, enabled: hasDoc },
+        { label: 'Zeichenfläche…', run: () => openDialog('artboard'), enabled: hasDoc },
         { label: 'Ebene aus Hintergrund', run: L.fromBackground, enabled: () => doc() && doc().layer.isBackground },
         '-',
         { label: 'Ebene durch Kopie', key: 'Strg+J', run: () => L.viaCopy(false), enabled: hasDoc },
@@ -262,6 +271,8 @@ export const MENUS = [
       { label: 'Verflüssigen…', key: 'Umschalt+Strg+X', run: () => openDialog('liquify'), enabled: hasDoc },
       '-',
       ...Object.entries(filterGroups).map(([g, items]) => ({ label: g, sub: items })),
+      '-',
+      { label: 'Plugins', sub: () => (PLUGIN_FILTERS.length ? PLUGIN_FILTERS.map((id) => ({ label: FILTERS[id].name, run: () => runFilter(id), enabled: hasDoc })) : [{ label: '(keine Plugin-Filter)', enabled: () => false }]) },
     ],
   },
   {
@@ -301,19 +312,43 @@ export const MENUS = [
       '-',
       ...[['history', 'Protokoll'], ['actions', 'Aktionen'], ['navigator', 'Navigator'], ['info', 'Info'], ['brushes', 'Pinsel'], ['character', 'Zeichen'], ['paragraph', 'Absatz']].map(([k, n]) => ({ label: n, run: () => { S.ui.flyout = S.ui.flyout === k ? null : k; emit(); } })),
       '-',
+      { label: () => (S.ui.timeline ? '✓ ' : '') + 'Zeitleiste (Animation)', run: () => { S.ui.timeline = !S.ui.timeline; emit(); } },
+      '-',
       { label: 'Arbeitsbereich zurücksetzen', run: () => { S.ui.hiddenPanels = {}; S.ui.flyout = null; localStorage.removeItem('sakura.hiddenPanels'); emit(); } },
     ],
   },
   {
     id: 'help', label: 'Hilfe', items: [
-      { label: 'Tutorial starten', run: () => { S.ui.tutorial = true; S.ui.menu = null; emit(); } },
+      { label: 'Funktionslexikon', key: 'F1', run: () => openDialog('help') },
+      { label: 'Tutorial starten', run: () => { S.ui.tutorial = true; S.ui.tutorialMode = null; S.ui.menu = null; emit(); } },
+      { label: 'Komplette Tour (alle Funktionen)', run: () => { S.ui.tutorialMode = 'full'; S.ui.tutorial = true; S.ui.menu = null; emit(); } },
       { label: 'Tastaturbefehle', run: () => openDialog('shortcuts') },
       { label: 'Funktionsübersicht', run: () => openDialog('features') },
       '-',
-      { label: 'Über Sakura Studio', run: () => openDialog('about') },
+      { label: 'Plugin-Befehle', sub: () => (PLUGIN_COMMANDS.length ? PLUGIN_COMMANDS.map((c) => ({ label: c.label, run: () => { try { c.run(); } catch (e) { toast('Plugin-Fehler: ' + e.message); } } })) : [{ label: '(keine)', enabled: () => false }]) },
+      { label: 'Plugin-Ordner öffnen', run: () => (window.native ? window.native.pluginsOpen() : toast('Nur in der Desktop-App')) },
+      { label: 'Plugins neu laden', run: () => loadPlugins().then((n) => toast(`${n} Plugin(s) geladen${PLUGIN_ERRORS.length ? ' – Fehler: ' + PLUGIN_ERRORS.join('; ') : ''}`)) },
+      '-',
+      { label: 'Über Lumora', run: () => openDialog('about') },
     ],
   },
 ];
+
+async function importAbr() {
+  let files;
+  if (window.native) files = await window.native.openDialog({ title: 'Photoshop-Pinsel importieren', filters: [{ name: 'Photoshop-Pinsel', extensions: ['abr'] }], multi: true });
+  else files = await new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.accept = '.abr'; i.multiple = true; i.onchange = async () => res(await Promise.all([...i.files].map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })))); i.click(); });
+  const { parseAbr } = await import('./io/abr.js');
+  const { addTipFromAlpha } = await import('./tools.js');
+  let n = 0, last = null;
+  for (const f of files || []) {
+    try { for (const b of parseAbr(new Uint8Array(f.data))) { last = addTipFromAlpha(b.canvas, `${f.name.replace(/\.abr$/i, '')} – ${b.name}`, b.spacing); n++; } }
+    catch (e) { toast(`${f.name}: ${e.message}`); }
+  }
+  if (last) { Object.assign(S.brush, { shape: 'custom:' + last }); setTool('brush', 'brush'); }
+  if (n) toast(`${n} Pinsel importiert – im Pinsel-Menü der Optionsleiste`);
+  else if (files && files.length) toast('Keine importierbaren Pinsel gefunden (nur Pinsel mit Bildspitze werden unterstützt)');
+}
 
 async function importBrushImage() {
   let files;

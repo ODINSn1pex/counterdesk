@@ -1,9 +1,9 @@
 {
-  "name": "sakura-studio",
-  "productName": "Sakura Studio",
-  "version": "2.0.0",
-  "description": "Sakura Studio – Bildbearbeitung",
-  "author": "Sakura Studio",
+  "name": "lumora",
+  "productName": "Lumora",
+  "version": "3.0.0",
+  "description": "Lumora – Bildbearbeitung",
+  "author": "Lumora",
   "main": "electron/main.cjs",
   "private": true,
   "scripts": {
@@ -12,8 +12,8 @@
     "dist": "vite build && electron-builder --win nsis portable --x64"
   },
   "build": {
-    "appId": "de.sakurastudio.app",
-    "productName": "Sakura Studio",
+    "appId": "app.lumora.editor",
+    "productName": "Lumora",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -36,22 +36,22 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Sakura Studio",
+      "shortcutName": "Lumora",
       "include": "build/installer.nsh",
-      "artifactName": "Sakura-Studio-Setup-${version}.${ext}",
+      "artifactName": "Lumora-Setup-${version}.${ext}",
       "language": "1031",
       "installerLanguages": [
         "de_DE"
       ]
     },
     "portable": {
-      "artifactName": "Sakura-Studio-Portable-${version}.${ext}"
+      "artifactName": "Lumora-Portable-${version}.${ext}"
     },
     "fileAssociations": [
       {
-        "ext": "sakura",
-        "name": "Sakura Studio Projekt",
-        "description": "Sakura Studio Projekt"
+        "ext": "lumora",
+        "name": "Lumora Projekt",
+        "description": "Lumora Projekt"
       }
     ],
     "afterPack": "build/afterPack.mjs"
@@ -61,10 +61,13 @@
     "ag-psd": "^22.0.2",
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
+    "gifenc": "^1.0.3",
+    "libraw-wasm": "^1.6.0",
     "onnxruntime-web": "^1.19.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "resedit": "^2.0.3",
+    "utif2": "^4.1.0",
     "vite": "^5.4.11"
   }
 }

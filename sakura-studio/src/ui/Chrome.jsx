@@ -14,7 +14,7 @@ export function TitleBar() {
     <div className="titlebar">
       <div className="tb-left">
         <Logo size={30} />
-        <span className="app-name">Sakura Studio</span>
+        <span className="app-name">Lumora</span>
         <nav className="menubar" data-tut="menu">
           {MENUS.map((m) => (
             <div key={m.id} className={'menu-root' + (open === m.id ? ' open' : '')}
@@ -79,13 +79,13 @@ function MenuItem({ it, onPick }) {
 
 // ---------------- Werkzeugleiste ----------------
 export const TOOLS = [
-  { id: 'move', name: 'Verschieben-Werkzeug', key: 'V', subs: [['move', 'Verschieben-Werkzeug', 'move']] },
+  { id: 'move', name: 'Verschieben-Werkzeug', key: 'V', subs: [['move', 'Verschieben-Werkzeug', 'move'], ['artboard', 'Zeichenflächen-Werkzeug', 'navigator']] },
   { id: 'marquee', name: 'Auswahlrechteck', key: 'M', subs: [['rect', 'Auswahlrechteck-Werkzeug', 'marquee'], ['ellipse', 'Auswahlellipse-Werkzeug', 'ellipse'], ['row', 'Einzelne-Zeile-Werkzeug', 'row'], ['col', 'Einzelne-Spalte-Werkzeug', 'col']] },
   { id: 'lasso', name: 'Lasso', key: 'L', subs: [['lasso', 'Lasso-Werkzeug', 'lasso'], ['polygon', 'Polygon-Lasso-Werkzeug', 'polygon']] },
   { id: 'wand', name: 'Schnellauswahl', key: 'W', subs: [['quick', 'Schnellauswahlwerkzeug', 'quick'], ['wand', 'Zauberstab-Werkzeug', 'wand'], ['object', 'Objektauswahlwerkzeug', 'object']] },
   { id: 'crop', name: 'Freistellungswerkzeug', key: 'C', subs: [['crop', 'Freistellungswerkzeug', 'crop']] },
   { id: 'eyedropper', name: 'Pipette', key: 'I', subs: [['eyedropper', 'Pipette-Werkzeug', 'eyedropper'], ['ruler', 'Linealwerkzeug', 'ruler']] },
-  { id: 'heal', name: 'Bereichsreparatur-Pinsel', key: 'J', subs: [['spot', 'Bereichsreparatur-Pinsel', 'heal'], ['healing', 'Reparatur-Pinsel', 'heal'], ['redeye', 'Rote-Augen-Werkzeug', 'redeye']] },
+  { id: 'heal', name: 'Bereichsreparatur-Pinsel', key: 'J', subs: [['spot', 'Bereichsreparatur-Pinsel', 'heal'], ['healing', 'Reparatur-Pinsel', 'heal'], ['redeye', 'Rote-Augen-Werkzeug', 'redeye'], ['remove', 'Entfernen-Werkzeug (KI)', 'magicEraser']] },
   { id: 'brush', name: 'Pinsel', key: 'B', subs: [['brush', 'Pinsel-Werkzeug', 'brush'], ['pencil', 'Buntstift-Werkzeug', 'pencil'], ['replace', 'Farbe-ersetzen-Werkzeug', 'replace']] },
   { id: 'stamp', name: 'Kopierstempel', key: 'S', subs: [['clone', 'Kopierstempel-Werkzeug', 'stamp'], ['pattern', 'Musterstempel-Werkzeug', 'pattern']] },
   { id: 'history', name: 'Protokollpinsel', key: 'Y', subs: [['history', 'Protokollpinsel-Werkzeug', 'history']] },
@@ -230,6 +230,8 @@ export function ContextMenu() {
     { label: 'Rückgängig', key: 'Strg+Z', run: EDIT.undo },
     '-',
     ...(d && d.selection ? [
+      { label: '✨ Auswahl entfernen (KI)', key: 'Umschalt+Strg+Entf', run: () => EDIT.remove() },
+      { label: 'Ausschneiden in neue Ebene', key: 'Umschalt+Strg+J', run: () => L.viaCopy(true) },
       { label: 'Auswahl aufheben', key: 'Strg+D', run: SELECT.none },
       { label: 'Auswahl umkehren', key: 'Umschalt+Strg+I', run: SELECT.invert },
       { label: 'Weiche Kante…', run: () => openDialog('modifySel', { kind: 'feather' }) },
@@ -241,6 +243,8 @@ export function ContextMenu() {
     ] : [
       { label: 'Alles auswählen', key: 'Strg+A', run: SELECT.all },
       { label: 'Motiv auswählen', run: SELECT.subject },
+      { label: 'Hintergrund entfernen (KI)', run: () => L.removeBackground() },
+      { label: 'Objekt entfernen (Werkzeug)', run: () => setTool('heal', 'remove') },
     ]),
     '-',
     { label: 'Frei transformieren', key: 'Strg+T', run: startTransform },

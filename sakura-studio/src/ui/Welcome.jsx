@@ -5,13 +5,13 @@ import { Blossom, Icon, Logo } from './icons.jsx';
 
 export function Welcome() {
   useStore();
-  const openSample = async () => { const img = await loadImage('./sample.jpg'); addDoc(docFromImage(img, 'Sakura-Beispiel.jpg')); };
+  const openSample = async () => { const img = await loadImage('./sample.jpg'); addDoc(docFromImage(img, 'Beispiel.jpg')); };
   const petals = isAnime() && S.prefs.sakuraPetals !== false && !S.prefs.reduceMotion;
   return (
     <div className="welcome" onDragOver={(e) => e.preventDefault()} onDrop={async (e) => { e.preventDefault(); for (const f of e.dataTransfer.files) await openBytes(f.name, new Uint8Array(await f.arrayBuffer()), (window.native && window.native.pathForFile && window.native.pathForFile(f)) || null); }}>
       {petals && <div className="petals" aria-hidden="true">{Array.from({ length: 16 }).map((_, i) => <Blossom key={i} size={10 + (i % 4) * 5} className="petal" style={{ left: `${(i * 61) % 100}%`, animationDelay: `${(i * 1.3) % 9}s`, animationDuration: `${9 + (i % 5) * 2}s` }} />)}</div>}
       <div className="welcome-card">
-        <div className="wl-head"><Logo size={54} /><div><h1>Sakura Studio</h1><div className="muted">Willkommen zurück – was möchtest du heute gestalten?</div></div></div>
+        <div className="wl-head"><Logo size={54} /><div><h1>Lumora</h1><div className="muted">Willkommen zurück – was möchtest du heute gestalten?</div></div></div>
         <div className="wl-actions">
           <button className="wl-btn primary" onClick={() => openDialog('new')}><Icon name="plus" size={22} /><span>Neue Datei</span><kbd>Strg+N</kbd></button>
           <button className="wl-btn" onClick={openFile}><Icon name="folderOpen" size={22} /><span>Öffnen…</span><kbd>Strg+O</kbd></button>
