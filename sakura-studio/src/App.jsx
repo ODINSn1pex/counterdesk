@@ -73,6 +73,7 @@ export default function App() {
   useEffect(() => {
     applyTheme();
     import('./tools.js').then((m) => m.loadCustomTips());
+    import('./state.js').then((m) => m.loadSavedPatterns());
     import('./plugins.js').then((m) => m.loadPlugins());
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);

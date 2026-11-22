@@ -4,7 +4,7 @@ import {
   startTransform, renderTransform, applyTransform, applyCrop, finishTextEdit, drawStarPath, drawBlossom,
   VIEW, Layer, renderTextLayer, composite, SEL, L, maskColorIsReveal, renderSmartLayer,
 } from './state.js';
-import { makeCanvas, ctx2d, cloneCanvas, clamp, dist, hexToRgb, rgbToHex, alphaBounds, rgbToHsl, hslToRgb } from './engine/util.js';
+import { makeCanvas, ctx2d, cloneCanvas, clamp, dist, hexToRgb, rgbToHex, alphaBounds, rgbToHsl, hslToRgb, rgbToHsv, hsvToRgb } from './engine/util.js';
 import { gcoFor, textBounds, getMerged, descendants } from './engine/doc.js';
 import { shapePath, drawLine, renderShapeLayer } from './engine/shapes.js';
 import { bilinearMap, meshMapFor } from './engine/mesh.js';
@@ -153,6 +153,9 @@ function beginStroke(d, e, kind) {
     st.src = entry.canvas;
   }
   if (kind === 'pattern') st.pat = patternCanvas(S.stampOpts.pattern);
+  if ((kind === 'brush' || kind === 'mixer') && st.o.dual) st.dualStroke = makeCanvas(d.w, d.h);
+  if ((kind === 'brush' || kind === 'mixer') && st.o.texture) st.tex = textureAlpha(st.o.texture, st.o.textureScale || 1, st.o.textureInvert);
+  if (kind === 'mixer') { const c = hexToRgb(S.fg); st.res = [c.r, c.g, c.b]; st.sampleCtx = ctx2d(st.before); }
   if (tgt.kind === 'mask') {
     st.reveal = kind === 'eraser' ? !maskColorIsReveal() : maskColorIsReveal();
     st.color = '#ffffff';
@@ -165,6 +168,61 @@ function addDirty(st, x, y, r) {
   const dd = st.dirty;
   if (!dd) st.dirty = { x0, y0, x1, y1 };
   else { if (x0 < dd.x0) dd.x0 = x0; if (y0 < dd.y0) dd.y0 = y0; if (x1 > dd.x1) dd.x1 = x1; if (y1 > dd.y1) dd.y1 = y1; }
+}
+
+// Farbeinstellungen pro Pinselabdruck (Farbton-, Sättigungs-, Helligkeits-, VG/HG-Jitter)
+function dynColor(o, base) {
+  if (!o.hueJitter && !o.satJitter && !o.briJitter && !o.fgbgJitter) return base;
+  let c = hexToRgb(base);
+  if (o.fgbgJitter) { const b = hexToRgb(S.bg), t = Math.random() * o.fgbgJitter; c = { r: c.r + (b.r - c.r) * t, g: c.g + (b.g - c.g) * t, b: c.b + (b.b - c.b) * t }; }
+  const h = rgbToHsv(c.r, c.g, c.b);
+  const hh = (h.h + (Math.random() - 0.5) * 360 * (o.hueJitter || 0) + 360) % 360;
+  const ss = clamp(h.s + (Math.random() - 0.5) * 2 * (o.satJitter || 0), 0, 1), vv = clamp(h.v + (Math.random() - 0.5) * 2 * (o.briJitter || 0), 0, 1);
+  const q = hsvToRgb(Math.round(hh / 3) * 3, Math.round(ss * 40) / 40, Math.round(vv * 40) / 40);
+  return rgbToHex(Math.round(q.r), Math.round(q.g), Math.round(q.b));
+}
+// Misch-Pinsel: Farbe im Pinsel vermischt sich mit der Leinwand (Nässe, Aufnahme, Mischung)
+function mixerColor(st, x, y) {
+  const o = st.o, W = st.before.width, H = st.before.height;
+  const xi = clamp(Math.round(x) - 1, 0, W - 3), yi = clamp(Math.round(y) - 1, 0, H - 3);
+  const px = st.sampleCtx.getImageData(xi, yi, 3, 3).data;
+  let r = 0, g = 0, b = 0, a = 0;
+  for (let i = 0; i < px.length; i += 4) { const w = px[i + 3] / 255; r += px[i] * w; g += px[i + 1] * w; b += px[i + 2] * w; a += w; }
+  const wet = o.wet ?? 0.5, mix = o.mix ?? 0.5, load = o.load ?? 0.5;
+  if (a > 0.01) { r /= a; g /= a; b /= a; const k = wet * mix; st.res = st.res.map((v, i) => v + ([r, g, b][i] - v) * k); }
+  // Farbe nachladen (Aufnahme)
+  if (o.reload !== false) { const f = hexToRgb(S.fg); st.res = st.res.map((v, i) => v + ([f.r, f.g, f.b][i] - v) * (1 - load) * 0.05); }
+  return rgbToHex(Math.round(st.res[0]), Math.round(st.res[1]), Math.round(st.res[2]));
+}
+// Struktur: Musterhelligkeit als Deckkraft-Maske
+const texCache = new Map();
+function textureAlpha(name, scale, invert) {
+  const k = name + '|' + scale + '|' + invert;
+  if (texCache.has(k)) return texCache.get(k);
+  const p = patternCanvas(name), w = Math.max(1, Math.round(p.width * scale)), h = Math.max(1, Math.round(p.height * scale));
+  const c = makeCanvas(w, h), x = ctx2d(c); x.drawImage(p, 0, 0, w, h);
+  const id = x.getImageData(0, 0, w, h), D = id.data;
+  for (let i = 0; i < D.length; i += 4) { let l = (D[i] * 0.299 + D[i + 1] * 0.587 + D[i + 2] * 0.114) / 255; if (invert) l = 1 - l; D[i] = D[i + 1] = D[i + 2] = 0; D[i + 3] = l * 255; }
+  x.putImageData(id, 0, 0);
+  texCache.set(k, c); return c;
+}
+// Symmetrie: Abdruck an allen Spiegelachsen wiederholen
+function symPoints(st, x, y) {
+  const m = st.o.symmetry; if (!m || m === 'none') return [[x, y]];
+  const cx = S.symCenter ? S.symCenter.x : st.d.w / 2, cy = S.symCenter ? S.symCenter.y : st.d.h / 2;
+  if (m === 'vertical') return [[x, y], [2 * cx - x, y]];
+  if (m === 'horizontal') return [[x, y], [x, 2 * cy - y]];
+  if (m === 'both') return [[x, y], [2 * cx - x, y], [x, 2 * cy - y], [2 * cx - x, 2 * cy - y]];
+  const n = Math.max(2, st.o.symSegments || 6), out = [], dx = x - cx, dy = y - cy;
+  for (let i = 0; i < n; i++) {
+    const a = i * Math.PI * 2 / n, c = Math.cos(a), s = Math.sin(a);
+    out.push([cx + dx * c - dy * s, cy + dx * s + dy * c]);
+    if (m === 'mandala') out.push([cx + dx * c + dy * s, cy + dx * s - dy * c]);
+  }
+  return out;
+}
+function stampSym(st, x, y, pressure) {
+  for (const [a, b] of symPoints(st, x, y)) stampDab(st, a, b, pressure);
 }
 
 function stampDab(st, x, y, pressure = 1) {
@@ -194,8 +252,21 @@ function stampDab(st, x, y, pressure = 1) {
     x2.globalAlpha = 1;
     return;
   }
-  const dab = dabCanvas(size, hard, st.color, shape, o.angle, o.roundness);
-  x2.globalAlpha = o.flow * st.curAlpha;
+  let color = st.color, angle = o.angle || 0, flow = o.flow;
+  if (kind === 'brush' || kind === 'mixer') {
+    if (st.tgt.kind === 'pixels') color = kind === 'mixer' ? mixerColor(st, x, y) : dynColor(o, st.color);
+    if (o.angleJitter) angle += (Math.random() - 0.5) * 360 * o.angleJitter;
+    if (o.angleFollow && st.dir != null) angle += st.dir * 180 / Math.PI;
+    if (o.flowJitter) flow *= 1 - Math.random() * o.flowJitter;
+    if (o.opacityJitter) flow *= 1 - Math.random() * o.opacityJitter;
+    if (st.dualStroke) {
+      const ds = Math.max(1, o.dualSize || 20), dd = dabCanvas(ds, 0.9, '#000', o.dual, 0, 1);
+      const sc = (o.dualScatter || 0) * size;
+      ctx2d(st.dualStroke).drawImage(dd, x + (Math.random() - 0.5) * sc - dd.width / 2, y + (Math.random() - 0.5) * sc - dd.height / 2);
+    }
+  }
+  const dab = dabCanvas(size, hard, color, shape, Math.round(angle), o.roundness);
+  x2.globalAlpha = flow * st.curAlpha;
   if (kind === 'pencil') { x2.imageSmoothingEnabled = false; x2.drawImage(dab, Math.round(x - dab.width / 2), Math.round(y - dab.height / 2)); }
   else x2.drawImage(dab, x - dab.width / 2, y - dab.height / 2);
   x2.globalAlpha = 1;
@@ -236,11 +307,12 @@ function healPatch(st, tx, ox, oy, s) {
 function strokeTo(st, p, pressure) {
   const o = st.o;
   const spacing = Math.max(0.5, o.size * (o.spacing || 0.12));
-  if (!st.last) { stampDab(st, p.x, p.y, pressure); st.last = { ...p }; refreshStroke(st); return; }
+  if (!st.last) { stampSym(st, p.x, p.y, pressure); st.last = { ...p }; refreshStroke(st); return; }
   const dx = p.x - st.last.x, dy = p.y - st.last.y, len = Math.hypot(dx, dy);
+  if (len > 0.5) st.dir = Math.atan2(dy, dx);
   let t = spacing - st.residue;
   while (t <= len) {
-    stampDab(st, st.last.x + dx * t / len, st.last.y + dy * t / len, pressure);
+    stampSym(st, st.last.x + dx * t / len, st.last.y + dy * t / len, pressure);
     t += spacing;
   }
   st.residue = len - (t - spacing);
@@ -272,6 +344,11 @@ function refreshStroke(st) {
   // Strich-Ausschnitt vorbereiten (Auswahl / Transparenz fixieren / Farbe ersetzen)
   const sc = scratchCanvas(rw, rh); const sx = ctx2d(sc);
   sx.drawImage(st.stroke, rx, ry, rw, rh, 0, 0, rw, rh);
+  if (st.dualStroke) { sx.globalCompositeOperation = 'destination-in'; sx.drawImage(st.dualStroke, rx, ry, rw, rh, 0, 0, rw, rh); sx.globalCompositeOperation = 'source-over'; }
+  if (st.tex) {
+    sx.save(); sx.globalCompositeOperation = 'destination-out'; sx.globalAlpha = clamp(st.o.textureDepth ?? 0.5, 0, 1);
+    sx.translate(-rx, -ry); sx.fillStyle = sx.createPattern(st.tex, 'repeat'); sx.fillRect(rx, ry, rw, rh); sx.restore();
+  }
   if (sel || lockA || st.kind === 'replace') {
     sx.globalCompositeOperation = 'destination-in';
     if (sel) sx.drawImage(sel, rx, ry, rw, rh, 0, 0, rw, rh);
@@ -531,6 +608,7 @@ export function pointerDown(e) {
   const p = e.p;
 
   // Alt in Malwerkzeugen = Pipette
+  if (e.alt && e.shift && tool === 'brush' && S.brush.symmetry && S.brush.symmetry !== 'none') { S.symCenter = { x: p.x, y: p.y }; view.overlay(); toast('Symmetrie-Mittelpunkt festgelegt'); return; }
   if (e.alt && (tool === 'brush' || tool === 'gradient' || (tool === 'shape'))) {
     const c = sampleColor(d, p, true, 1); if (c) setFg(c); return;
   }
@@ -578,8 +656,22 @@ export function pointerDown(e) {
       quickSelectAt(d, p);
       return;
     }
-    case 'crop': return cropDown(d, e);
+    case 'crop': {
+      if (sub === 'slice' || sub === 'frame') { T = { kind: 'rectTool', sub, a: p, b: p }; return; }
+      return cropDown(d, e);
+    }
     case 'eyedropper': {
+      if (sub === 'sampler' || sub === 'count' || sub === 'note') {
+        const list = sub === 'sampler' ? d.samplers : sub === 'count' ? d.counts : d.notes;
+        const near = list.findIndex((q) => Math.hypot(q.x - p.x, q.y - p.y) < 8 / d.zoom);
+        if (e.alt) { if (near >= 0) { list.splice(near, 1); commit('Markierung löschen'); view.overlay(); } return; }
+        if (near >= 0) { T = { kind: 'dragMark', list, i: near }; return; }
+        if (sub === 'sampler' && list.length >= 10) { toast('Höchstens 10 Farbaufnahmepunkte'); return; }
+        list.push(sub === 'note' ? { x: p.x, y: p.y, text: '' } : { x: p.x, y: p.y });
+        if (sub === 'note') { S.ui.noteSel = list.length - 1; S.ui.panelTabs.props = 'notes'; S.ui.hiddenPanels.props = false; }
+        if (sub === 'sampler') { S.ui.flyout = 'info'; }
+        commit({ sampler: 'Farbaufnahme', count: 'Zählung', note: 'Anmerkung' }[sub]); view.overlay(); emit(); return;
+      }
       if (sub === 'ruler') { T = { kind: 'measure', a: p }; S.measure = { a: p, b: p }; view.overlay(); emit(); return; }
       const c = sampleColor(d, p, S.eyedrop.allLayers, S.eyedrop.sample);
       if (c) { if (e.alt) setBg(c); else setFg(c); }
@@ -588,6 +680,12 @@ export function pointerDown(e) {
     }
     case 'heal': {
       if (sub === 'redeye') { redEye(d, p); return; }
+      if (sub === 'patch' || sub === 'camove') {
+        // In der Auswahl ziehen = verschieben; außerhalb = neue Lasso-Auswahl
+        const inside = d.selection && ctx2d(d.selection).getImageData(Math.floor(clamp(p.x, 0, d.w - 1)), Math.floor(clamp(p.y, 0, d.h - 1)), 1, 1).data[3] > 100;
+        if (inside) { T = { kind: 'patchDrag', sub, a: p, b: p }; return; }
+        T = { kind: 'lasso', pts: [p], mode: selectionMode(e) }; return;
+      }
       if (sub === 'remove') {
         if (!canEditPixels(d.layer)) return;
         const m = makeCanvas(d.w, d.h);
@@ -602,7 +700,7 @@ export function pointerDown(e) {
       T = { kind: 'stroke', st }; strokeTo(st, p, 1); return;
     }
     case 'brush': {
-      const kind = sub === 'pencil' ? 'pencil' : sub === 'replace' ? 'replace' : 'brush';
+      const kind = sub === 'pencil' ? 'pencil' : sub === 'replace' ? 'replace' : sub === 'mixer' ? 'mixer' : 'brush';
       const st = beginStroke(d, e, kind); if (!st) return;
       T = { kind: 'stroke', st };
       if (e.shift && S.lastPaintPoint) { st.last = { ...S.lastPaintPoint }; }
@@ -690,6 +788,8 @@ export function pointerMove(e) {
     case 'quick': quickSelectAt(d, p); break;
     case 'crop': cropDrag(d, e); break;
     case 'measure': S.measure = { a: T.a, b: e.shift ? snapAngle(T.a, p) : p }; view.overlay(); emit(); break;
+    case 'dragMark': T.list[T.i].x = p.x; T.list[T.i].y = p.y; T.moved = true; view.overlay(); emit(); break;
+    case 'rectTool': case 'typeBox': case 'patchDrag': T.b = p; view.overlay(); break;
     case 'eyedrop': { const c = sampleColor(d, p, S.eyedrop.allLayers, S.eyedrop.sample); if (c) { if (T.bg) S.bg = c; else S.fg = c; emit(); } break; }
     case 'stroke': {
       const st = T.st;
@@ -751,7 +851,7 @@ export function pointerUp(e) {
       for (const it of t.items) {
         const x = it.layer;
         if (x.type === 'smart') { x.smart = { ...x.smart, t: shiftT(x.smart.t, t.dx, t.dy) }; renderSmartLayer(x, d.w, d.h); }
-        else if (x.type === 'shape') { x.shape = { ...x.shape, x: x.shape.x + t.dx, y: x.shape.y + t.dy }; renderShapeLayer(x, d.w, d.h); }
+        else if (x.type === 'shape') { x.shape = { ...x.shape, x: x.shape.x + t.dx, y: x.shape.y + t.dy, parts: (x.shape.parts || []).map((q) => ({ ...q, x: q.x + t.dx, y: q.y + t.dy })) }; renderShapeLayer(x, d.w, d.h); }
         else if (x.type === 'text') { x.text.x += t.dx; x.text.y += t.dy; renderTextLayer(x, d.w, d.h); }
       }
       commit('Verschieben');
@@ -788,6 +888,27 @@ export function pointerUp(e) {
     case 'quick': commit('Schnellauswahl'); break;
     case 'crop': emit(); break;
     case 'measure': emit(); break;
+    case 'dragMark': if (t.moved) commit('Markierung verschieben'); break;
+    case 'patchDrag': {
+      const dx = Math.round(t.b.x - t.a.x), dy = Math.round(t.b.y - t.a.y);
+      if (!dx && !dy) break;
+      import('./advanced.js').then((m) => (t.sub === 'patch' ? m.patchFrom(dx, dy) : m.contentAwareMove(dx, dy, S.heal.caMode === 'extend')));
+      break;
+    }
+    case 'typeBox': {
+      const r = norm({ x: t.a.x, y: t.a.y, w: t.b.x - t.a.x, h: t.b.y - t.a.y });
+      if (r.w > 12 && r.h > 12) createTextLayer(d, { x: r.x, y: r.y }, { w: Math.round(r.w), h: Math.round(r.h) });
+      else createTextLayer(d, t.a, null);
+      break;
+    }
+    case 'rectTool': {
+      const r = norm({ x: t.a.x, y: t.a.y, w: t.b.x - t.a.x, h: t.b.y - t.a.y });
+      if (r.w < 4 || r.h < 4) break;
+      const R = { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) };
+      if (t.sub === 'slice') { d.slices.push({ ...R, name: `${d.name.replace(/\.[^.]+$/, '')}_${String(d.slices.length + 1).padStart(2, '0')}` }); commit('Slice erstellen'); }
+      else makeFrame(d, R);
+      view.overlay(); emit(); break;
+    }
     case 'eyedrop': setFg(S.fg); break;
     case 'stroke': {
       S.lastPaintPoint = { ...p };
@@ -1269,10 +1390,16 @@ function typeDown(d, e) {
       emit(); view.request(); return;
     }
   }
-  const l = new Layer(d.w, d.h, 'Text');
+  // Ziehen = Textrahmen (Absatztext), Klicken = Punkttext
+  T = { kind: 'typeBox', a: p, b: p };
+}
+
+function createTextLayer(d, p, box) {
+  const l = new Layer(d.w, d.h, box ? 'Absatztext' : 'Text');
   l.type = 'text';
-  l.text = { content: '', x: p.x, y: p.y - S.text.size * 0.8, font: S.text.font, size: S.text.size, color: S.text.color || S.fg, bold: S.text.bold, italic: S.text.italic, underline: S.text.underline, strike: S.text.strike, caps: S.text.caps, align: S.text.align, leading: S.text.leading, tracking: S.text.tracking, vertical: S.sub.type === 'v' };
+  l.text = { content: '', x: p.x, y: box ? p.y : p.y - S.text.size * 0.8, box: box || null, font: S.text.font, size: S.text.size, color: S.text.color || S.fg, bold: S.text.bold, italic: S.text.italic, underline: S.text.underline, strike: S.text.strike, caps: S.text.caps, align: S.text.align, leading: S.text.leading, tracking: S.text.tracking, vertical: S.sub.type === 'v' };
   if (S.sub.type === 'v') l.text.leading = 1;
+  if (box && l.text.align === 'center') l.text.align = 'left';
   d.addLayer(l);
   S.ui.textEdit = { layerId: l.id, isNew: true };
   emit(); view.request();
@@ -1298,3 +1425,20 @@ export function renderTextLayerV(l, w, h) {
 // Für Overlay
 export function opState() { return T; }
 export { rectFrom, norm, L };
+
+// Rahmenwerkzeug: Platzhalter-Ebene mit rechteckiger Maske; Bilder werden darin eingepasst
+function makeFrame(d, r) {
+  const l = new Layer(d.w, d.h, `Rahmen ${d.layers.filter((x) => x.frame).length + 1}`);
+  l.frame = { ...r };
+  const x = l.ctx; x.fillStyle = '#9aa0b4'; x.fillRect(r.x, r.y, r.w, r.h);
+  x.strokeStyle = '#ffffff'; x.lineWidth = Math.max(1, Math.min(r.w, r.h) / 200); x.beginPath(); x.moveTo(r.x, r.y); x.lineTo(r.x + r.w, r.y + r.h); x.moveTo(r.x + r.w, r.y); x.lineTo(r.x, r.y + r.h); x.stroke();
+  l.mask = makeCanvas(d.w, d.h); const m = ctx2d(l.mask); m.fillStyle = '#fff'; m.fillRect(r.x, r.y, r.w, r.h); l.maskEnabled = true;
+  d.addLayer(l); commit('Rahmen erstellen');
+  toast('Rahmen erstellt – Bild per Ebene › Bild in Rahmen platzieren oder Drag & Drop einsetzen');
+}
+export function placeInFrame(img) {
+  const d = doc(); const l = d && d.layer; if (!l || !l.frame) { toast('Zuerst eine Rahmen-Ebene auswählen'); return false; }
+  const r = l.frame, k = Math.max(r.w / img.width, r.h / img.height), w = img.width * k, h = img.height * k;
+  l.ctx.clearRect(0, 0, d.w, d.h); l.ctx.drawImage(img, r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h);
+  l.touch(); view.request(); commit('Bild in Rahmen platzieren'); return true;
+}

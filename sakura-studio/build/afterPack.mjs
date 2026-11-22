@@ -20,7 +20,8 @@ export default async function afterPack(context) {
   for (const v of vi) {
     const lang = { lang: 1033, codepage: 1200 };
     v.setStringValues(lang, { FileDescription: 'Lumora', ProductName: 'Lumora', CompanyName: 'Lumora', LegalCopyright: '© 2026 Lumora', OriginalFilename: 'Lumora.exe', InternalName: 'Lumora' });
-    v.setFileVersion(3, 0, 0, 0, 1033); v.setProductVersion(3, 0, 0, 0, 1033);
+    const [a, b, c] = String(context.packager.appInfo.version).split('.').map(Number);
+    v.setFileVersion(a, b, c, 0, 1033); v.setProductVersion(a, b, c, 0, 1033);
     v.outputToResourceEntries(res.entries);
   }
   res.outputResource(pe);

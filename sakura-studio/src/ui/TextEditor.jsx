@@ -15,13 +15,13 @@ export function TextEditor({ geom }) {
   const t = l.text;
   const fs = t.size * g.z;
   const lines = (t.content || '').split('\n');
-  const width = Math.max(120, ...lines.map((s) => s.length * fs * 0.62)) + 30;
+  const width = t.box ? t.box.w * g.z : Math.max(120, ...lines.map((s) => s.length * fs * 0.62)) + 30;
   let left = g.ox + t.x * g.z;
-  if (t.align === 'center') left -= width / 2; else if (t.align === 'right') left -= width;
+  if (!t.box) { if (t.align === 'center') left -= width / 2; else if (t.align === 'right') left -= width; }
   const style = {
-    left, top: g.oy + t.y * g.z, width, height: Math.max(fs * 1.4, lines.length * fs * (t.leading || 1.2) + 8),
+    left, top: g.oy + t.y * g.z, width, height: t.box ? t.box.h * g.z : Math.max(fs * 1.4, lines.length * fs * (t.leading || 1.2) + 8),
     font: `${t.italic ? 'italic ' : ''}${t.bold ? '700 ' : '400 '}${fs}px "${t.font}"`,
-    lineHeight: (t.leading || 1.2), textAlign: t.align, letterSpacing: (t.tracking || 0) * g.z + 'px',
+    lineHeight: (t.leading || 1.2), textAlign: t.align, textTransform: t.caps ? 'uppercase' : undefined, whiteSpace: t.box ? 'pre-wrap' : 'pre', letterSpacing: (t.tracking || 0) * g.z + 'px',
     writingMode: t.vertical ? 'vertical-rl' : undefined,
   };
   return (
@@ -31,7 +31,8 @@ export function TextEditor({ geom }) {
       style={style}
       value={t.content}
       placeholder="Text eingeben…"
-      spellCheck={false}
+      spellCheck={S.prefs.spellcheck !== false}
+      lang={S.prefs.spellLang || 'de-DE'}
       onChange={(e) => updateTextLayer(l, { content: e.target.value })}
       onKeyDown={(e) => {
         e.stopPropagation();

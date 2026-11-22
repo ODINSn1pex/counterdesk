@@ -7,7 +7,8 @@ import { useEffect, useRef, useState } from 'react';
 
 export const FONTS = ['Segoe UI', 'Arial', 'Georgia', 'Times New Roman', 'Verdana', 'Trebuchet MS', 'Courier New', 'Impact', 'Comic Sans MS', 'Tahoma', 'Palatino Linotype', 'Garamond', 'Consolas', 'Lucida Console', 'Yu Gothic', 'Meiryo', 'MS Gothic', 'Segoe Script', 'Segoe Print', 'Calibri', 'Cambria', 'Candara', 'Constantia', 'Corbel', 'Franklin Gothic Medium', 'Gabriola', 'Ink Free', 'Bahnschrift'];
 
-export function Num({ label, value, onChange, min = 0, max = 100, step = 1, unit = '', width = 46, scrub = true }) {
+export function Num({ label, value: rawValue, onChange, min = 0, max = 100, step = 1, unit = '', width = 46, scrub = true }) {
+  const value = Number.isFinite(+rawValue) ? +rawValue : 0;
   const ref = useRef(null);
   const [txt, setTxt] = useState(null);
   const startScrub = (e) => {
@@ -67,6 +68,8 @@ function BrushOpts({ o = S.brush, showMode = true, showFlow = true }) {
       <Num label="Deckkr.:" {...pct(o, 'opacity')} />
       {showFlow && <Num label="Fluss:" {...pct(o, 'flow')} />}
       {o === S.brush && <Num label="Glättung:" value={Math.round(o.smoothing * 100)} onChange={(v) => { o.smoothing = v / 100; emit(); }} unit="%" />}
+      {o === S.brush && <><span className="lbl">Symmetrie:</span><Sel value={o.symmetry} onChange={set(o, 'symmetry')} options={[['none', 'Aus'], ['vertical', 'Vertikal'], ['horizontal', 'Horizontal'], ['both', 'Doppelachse'], ['radial', 'Radial'], ['mandala', 'Mandala']]} width={100} />
+        <button className="btn small" title="Pinseleinstellungen (F5)" onClick={() => openDialog('brushSettings')}>Einstellungen…</button></>}
     </>
   );
 }
@@ -189,6 +192,16 @@ export function OptionsBar() {
       <div className="opt-sep" />
       <button className="btn" onClick={() => SELECT.subject()}><Icon name="sparkle" size={13} /> Motiv auswählen</button>
     </>;
+  } else if (t === 'crop' && (sub === 'slice' || sub === 'frame')) {
+    body = sub === 'slice' ? <>
+      <span className="hint">Rechteck aufziehen = Slice · Exportieren über Datei › Exportieren › Slices</span>
+      <button className="btn" onClick={() => import('../advanced.js').then((m) => m.slicesFromGuides())}>Slices aus Hilfslinien</button>
+      <button className="btn" disabled={!d || !d.slices.length} onClick={() => import('../advanced.js').then((m) => m.exportSlices())}>Exportieren…</button>
+      <button className="btn" disabled={!d || !d.slices.length} onClick={() => import('../advanced.js').then((m) => m.clearSlices())}>Alle löschen</button>
+    </> : <>
+      <span className="hint">Rechteck aufziehen = Platzhalter-Rahmen · Bild hineinsetzen über Ebene › Bild in Rahmen platzieren</span>
+      <button className="btn" disabled={!d || !d.layer.frame} onClick={() => import('../advanced.js').then((m) => m.placeIntoFrame())}>Bild platzieren…</button>
+    </>;
   } else if (t === 'crop') {
     body = <>
       <Sel value={S.crop.ratio} onChange={(v) => { S.crop.ratio = v; emit(); }} options={[['free', 'Verhältnis'], ['orig', 'Original'], ['1', '1 : 1 (Quadrat)'], ['0.8', '4 : 5 (8 : 10)'], ['1.3333', '4 : 3'], ['1.5', '3 : 2'], ['1.7778', '16 : 9'], ['0.5625', '9 : 16']]} width={140} />
@@ -209,6 +222,12 @@ export function OptionsBar() {
         <button className="btn" disabled={!m} onClick={() => straighten(ang)}>Ebene gerade ausrichten</button>
         <button className="btn" onClick={() => { S.measure = null; view.overlay(); emit(); }}>Löschen</button>
       </>;
+    } else if (sub === 'sampler' || sub === 'count' || sub === 'note') {
+      const k = { sampler: 'samplers', count: 'counts', note: 'notes' }[sub];
+      body = <>
+        <span className="hint">{sub === 'sampler' ? 'Klicken: Farbaufnahmepunkt (max. 10, Werte im Info-Bedienfeld) · Ziehen: verschieben · Alt+Klick: löschen' : sub === 'count' ? `Klicken: zählen · Alt+Klick: entfernen · Anzahl: ${d ? d.counts.length : 0}` : 'Klicken: Anmerkung setzen (Text im Bedienfeld „Notizen“) · Alt+Klick: löschen'}</span>
+        <button className="btn" disabled={!d || !d[k].length} onClick={() => { d[k] = []; view.overlay(); import('../state.js').then((m) => m.commit('Alle löschen')); }}>Alle löschen</button>
+      </>;
     } else body = <>
       <span className="lbl">Aufnahmebereich:</span>
       <Sel value={String(S.eyedrop.sample)} onChange={(v) => { S.eyedrop.sample = Number(v); emit(); }} options={[['1', '1 Pixel'], ['3', '3 × 3 Durchschnitt'], ['5', '5 × 5 Durchschnitt'], ['11', '11 × 11 Durchschnitt'], ['31', '31 × 31 Durchschnitt']]} width={150} />
@@ -219,12 +238,14 @@ export function OptionsBar() {
   } else if (t === 'heal') {
     body = sub === 'redeye' ? <><Num label="Pupillengröße:" value={S.brush.size} min={2} max={500} onChange={set(S.brush, 'size')} unit=" Px" /><span className="hint">Auf rotes Auge klicken</span></> : <>
       <BrushPicker o={S.heal} />
-      <span className="hint">{sub === 'spot' ? 'Inhaltsbasiert: einfach über Makel malen' : sub === 'remove' ? 'Objekt übermalen – beim Loslassen entfernt die KI es und ergänzt den Hintergrund' : 'Alt + Klick: Quelle festlegen, dann malen'}</span>
+      {sub === 'camove' && <><span className="lbl">Modus:</span><Sel value={S.heal.caMode || 'move'} onChange={set(S.heal, 'caMode')} options={[['move', 'Verschieben'], ['extend', 'Erweitern (Kopie)']]} width={140} /></>}
+      <span className="hint">{sub === 'patch' ? 'Fehlerstelle umranden, dann die Auswahl auf eine saubere Stelle ziehen' : sub === 'camove' ? 'Objekt umranden, dann an die neue Position ziehen – die alte Stelle wird gefüllt' : sub === 'spot' ? 'Inhaltsbasiert: einfach über Makel malen' : sub === 'remove' ? 'Objekt übermalen – beim Loslassen entfernt die KI es und ergänzt den Hintergrund' : 'Alt + Klick: Quelle festlegen, dann malen'}</span>
       {sub === 'healing' && <Check label="Ausger." value={S.stampOpts.aligned} onChange={set(S.stampOpts, 'aligned')} />}
     </>;
   } else if (t === 'brush') {
     if (sub === 'pencil') body = <><BrushPicker o={S.pencil} /><Num label="Deckkr.:" {...pct(S.pencil, 'opacity')} /></>;
-    else body = <><BrushOpts />{sub === 'replace' && <span className="hint">Ersetzt Farbe, erhält Helligkeit</span>}</>;
+    else body = <><BrushOpts />{sub === 'replace' && <span className="hint">Ersetzt Farbe, erhält Helligkeit</span>}
+      {sub === 'mixer' && <><Num label="Nass:" {...pct(S.brush, 'wet')} /><Num label="Aufnahme:" {...pct(S.brush, 'load')} /><Num label="Mischung:" {...pct(S.brush, 'mix')} /></>}</>;
   } else if (t === 'stamp') {
     body = <>
       <BrushOpts showMode={false} />
@@ -286,10 +307,13 @@ export function OptionsBar() {
       <Sel value={(tv('bold') ? 'b' : '') + (tv('italic') ? 'i' : '')} onChange={(v) => { upd('bold')(v.includes('b')); upd('italic')(v.includes('i')); }} options={[['', 'Regular'], ['b', 'Bold'], ['i', 'Italic'], ['bi', 'Bold Italic']]} width={100} />
       <Num label="" value={tv('size')} min={1} max={2000} onChange={upd('size')} unit=" Pt" width={56} />
       <div className="seg">
-        {[['left', 'alignL'], ['center', 'alignHC'], ['right', 'alignR']].map(([a, ic]) => <button key={a} className={tv('align') === a ? 'on' : ''} onClick={() => upd('align')(a)} title={'Text ' + a}><Icon name={ic} size={15} /></button>)}
+        {[['left', 'alignL', 'Linksbündig'], ['center', 'alignHC', 'Zentriert'], ['right', 'alignR', 'Rechtsbündig']].map(([a, ic, n]) => <button key={a} className={tv('align') === a ? 'on' : ''} onClick={() => upd('align')(a)} title={n}><Icon name={ic} size={15} /></button>)}
+        <button className={tv('align') === 'justify' ? 'on' : ''} onClick={() => upd('align')('justify')} title="Blocksatz (nur Absatztext)">≡</button>
       </div>
       <input type="color" className="color-in" value={tv('color') || S.fg} onChange={(e) => upd('color')(e.target.value)} title="Textfarbe" />
+      <button className="btn" title="Verkrümmten Text erstellen" onClick={() => import('../textTools.js').then((m) => m.warpText())}>Verkrümmen…</button>
       <button className="btn" onClick={() => { S.ui.flyout = 'character'; emit(); }}>Zeichen…</button>
+      {!tl && <span className="hint">Klicken: Punkttext · Ziehen: Textrahmen</span>}
       {S.ui.textEdit && <button className="btn primary" onClick={() => import('../state.js').then((m) => m.finishTextEdit())}><Icon name="check" size={14} /> Fertig</button>}
     </>;
   } else if (t === 'shape') {

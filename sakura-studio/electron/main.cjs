@@ -1,5 +1,5 @@
 // Lumora – Electron Hauptprozess
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, protocol, net, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, protocol, net, safeStorage, Menu } = require('electron');
 const { pathToFileURL } = require('url');
 const path = require('path');
 const fs = require('fs');
@@ -60,11 +60,25 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      spellcheck: false,
+      spellcheck: true,
       backgroundThrottling: false,
     },
   });
   win.loadURL('app://bundle/index.html');
+  // Rechtschreibprüfung für Texteingaben (Deutsch + Englisch), Vorschläge per Rechtsklick
+  try { win.webContents.session.setSpellCheckerLanguages(['de-DE', 'en-US']); } catch (e) { /* Sprache nicht verfügbar */ }
+  win.webContents.on('context-menu', (_e, params) => {
+    if (!params.isEditable) return;
+    const items = [];
+    if (params.misspelledWord) {
+      for (const sug of params.dictionarySuggestions.slice(0, 6)) items.push({ label: sug, click: () => win.webContents.replaceMisspelling(sug) });
+      if (!params.dictionarySuggestions.length) items.push({ label: 'Keine Vorschläge', enabled: false });
+      items.push({ label: 'Zum Wörterbuch hinzufügen', click: () => win.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord) });
+      items.push({ type: 'separator' });
+    }
+    items.push({ label: 'Ausschneiden', role: 'cut' }, { label: 'Kopieren', role: 'copy' }, { label: 'Einfügen', role: 'paste' }, { type: 'separator' }, { label: 'Alles auswählen', role: 'selectAll' });
+    Menu.buildFromTemplate(items).popup({ window: win });
+  });
   win.once('ready-to-show', () => { win.maximize(); win.show(); });
   win.on('maximize', () => win.webContents.send('win-state', true));
   win.on('unmaximize', () => win.webContents.send('win-state', false));

@@ -1,6 +1,6 @@
 // Globaler Zustand + Aktionen
 import { useSyncExternalStore } from 'react';
-import { Doc, Layer, createDoc, docFromImage, composite, flattenToCanvas, renderTextLayer, layerProps, applyLayerProps, getMerged, normalizeTree, childrenOf, descendants, effectiveVisible } from './engine/doc.js';
+import { Doc, Layer, createDoc, docFromImage, composite, flattenToCanvas, renderTextLayer, layerProps, applyLayerProps, getMerged, normalizeTree, childrenOf, descendants, effectiveVisible, FX_ENV } from './engine/doc.js';
 import { ADJUSTMENTS, FILTERS } from './engine/filters.js';
 import { makeCanvas, ctx2d, cloneCanvas, alphaBounds, loadImage, canvasToBytes, hexToRgb, luminance } from './engine/util.js';
 import * as SEL from './engine/selection.js';
@@ -64,7 +64,10 @@ export const S = {
   sub: { marquee: 'rect', lasso: 'lasso', wand: 'quick', crop: 'crop', eyedropper: 'eyedropper', heal: 'spot', brush: 'brush', stamp: 'clone', history: 'history', eraser: 'eraser', gradient: 'gradient', blur: 'blur', dodge: 'dodge', pen: 'pen', type: 'h', select: 'direct', shape: 'rect', view: 'hand' },
   fg: '#e57fb8',
   bg: '#ffffff',
-  brush: { size: 30, hardness: 0.8, opacity: 1, flow: 1, spacing: 0.12, mode: 'normal', smoothing: 0.2, angle: 0, roundness: 1, scatter: 0, jitter: 0, shape: 'round' },
+  brush: { size: 30, hardness: 0.8, opacity: 1, flow: 1, spacing: 0.12, mode: 'normal', smoothing: 0.2, angle: 0, roundness: 1, scatter: 0, jitter: 0, shape: 'round',
+    hueJitter: 0, satJitter: 0, briJitter: 0, fgbgJitter: 0, opacityJitter: 0, flowJitter: 0, angleJitter: 0, angleFollow: false,
+    texture: '', textureDepth: 0.5, textureScale: 1, textureInvert: false, dual: '', dualSize: 20, dualScatter: 0.5,
+    symmetry: 'none', symSegments: 6, wet: 0.5, load: 0.5, mix: 0.5, reload: true },
   eraser: { size: 40, hardness: 0.7, opacity: 1, flow: 1, tolerance: 40 },
   pencil: { size: 4, opacity: 1 },
   stampOpts: { aligned: true, sampleAll: false, pattern: 'sakura' },
@@ -80,6 +83,7 @@ export const S = {
   crop: { ratio: 'free', deleteCropped: true },
   gradients: LS.get('gradients', null) || DEFAULT_GRADIENTS,
   swatches: LS.get('swatches', null) || DEFAULT_SWATCHES,
+  stylePresets: LS.get('stylePresets', null) || [],
   recentColors: LS.get('recentColors', []),
   customBrushes: LS.get('customBrushes', []),
   recent: LS.get('recent', []),
@@ -272,6 +276,7 @@ function addRecent(p) {
 
 export async function openBytes(name, bytes, path, opts = {}) {
   const ext = name.split('.').pop().toLowerCase();
+  if (PRESET_EXT.includes(ext)) { await importPresetFiles([{ name, data: bytes }]); return; }
   try {
     let d;
     if (ext === 'lumora' || ext === 'sakura') d = await loadProject(new TextDecoder().decode(bytes), name);
@@ -454,6 +459,7 @@ export async function serializeProject(d) {
   return JSON.stringify({
     app: 'Lumora', version: 1, w: d.w, h: d.h, name: d.name, active: d.active, ppi: d.ppi,
     guides: d.guides, paths: d.paths, artboards: d.artboards || [], frames: d.frames || [],
+    globalLight: d.globalLight, comps: d.comps || [], samplers: d.samplers || [], counts: d.counts || [], notes: d.notes || [], slices: d.slices || [],
     layers: d.layers.map((l) => {
       const props = layerProps(l);
       const smartSrc = props.smart ? toUrl(props.smart.src) : null;
@@ -485,6 +491,10 @@ async function loadProject(text, name) {
   // Gruppen-Verweise auf neue IDs umstellen
   d.layers.forEach((l) => { if (l.parent != null) l.parent = idMap.get(l.parent) ?? null; });
   d.frames = (j.frames || []).map((f) => ({ delay: f.delay, vis: Object.fromEntries(Object.entries(f.vis || {}).map(([k, v]) => [idMap.get(Number(k)) ?? k, v])) }));
+  const remap = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [idMap.get(Number(k)) ?? k, v]));
+  d.comps = (j.comps || []).map((c) => ({ ...c, state: remap(c.state) }));
+  if (j.globalLight) d.globalLight = j.globalLight;
+  d.samplers = j.samplers || []; d.counts = j.counts || []; d.notes = j.notes || []; d.slices = j.slices || [];
   d.layers = normalizeTree(d.layers);
   for (const a of j.alpha || []) { const c = makeCanvas(j.w, j.h); ctx2d(c).drawImage(await loadImage(a.png), 0, 0); d.alphaChannels.push({ name: a.name, canvas: c }); }
   d.active = Math.min(j.active || 0, d.layers.length - 1);
@@ -866,7 +876,17 @@ export function gradientStops(g) {
 }
 
 const patCache = {};
+const patScaled = {};
+FX_ENV.pattern = (name, scale) => {
+  const base = patternCanvas(name); if (scale === 1) return base;
+  const k = name + '@' + scale; if (patScaled[k] && patScaled[k].src === base) return patScaled[k].c;
+  const c = makeCanvas(Math.max(1, Math.round(base.width * scale)), Math.max(1, Math.round(base.height * scale)));
+  ctx2d(c).drawImage(base, 0, 0, c.width, c.height); patScaled[k] = { src: base, c }; return c;
+};
+// Importierte Muster (.pat) und eigene Muster
+export const CUSTOM_PATTERNS = {};
 export function patternCanvas(name) {
+  if (CUSTOM_PATTERNS[name]) return CUSTOM_PATTERNS[name];
   if (patCache[name]) return patCache[name];
   const s = 48; const c = makeCanvas(s, s); const x = ctx2d(c);
   const fg = '#e57fb8', bg = '#2a2347';
@@ -1328,7 +1348,8 @@ export function applyTransform() {
     const ncx = cx0 + (t.cx - t.cx0), ncy = cy0 + (t.cy - t.cy0);
     const nw = s0.w * t.sx, nh = s0.h * t.sy;
     l.shape = { ...s0, x: ncx - nw / 2, y: ncy - nh / 2, w: nw, h: nh, rot: (s0.rot || 0) + t.rot };
-    if (t.skx) { rasterize(l); }
+    if (s0.parts && s0.parts.length) l.shape.parts = s0.parts.map((q) => { const pcx = ncx + (q.x + q.w / 2 - cx0) * t.sx, pcy = ncy + (q.y + q.h / 2 - cy0) * t.sy, pw = q.w * t.sx, ph = q.h * t.sy; return { ...q, x: pcx - pw / 2, y: pcy - ph / 2, w: pw, h: ph }; });
+    if (t.skx || (s0.parts && s0.parts.length && t.rot)) { rasterize(l); }
     else { renderShapeLayer(l, d.w, d.h); }
   }
   if (t.hadSel && d) {
@@ -1400,6 +1421,11 @@ export const VIEW = {
 
 export function openDialog(type, data = {}) { finishTextEdit(); S.ui.dialog = { type, ...data }; S.ui.menu = null; emit(); }
 export function closeDialog() { S.ui.dialog = null; emit(); }
+// Formular-Dialog als Promise: liefert die Werte oder null
+let formSeq = 0;
+export function askForm(title, fields, opts = {}) {
+  return new Promise((resolve) => openDialog('form', { title, fields, resolve, id: ++formSeq, ...opts }));
+}
 
 export function savePrefs() {
   LS.set('prefs', S.prefs);
@@ -1537,3 +1563,182 @@ export const ARTBOARDS = {
     toast(`${d.artboards.length} Zeichenflächen exportiert`);
   },
 };
+
+
+// ---------------- Vorgaben-Import (.abr, .pat, .asl, .grd, .aco) ----------------
+export const PRESET_EXT = ['abr', 'pat', 'asl', 'grd', 'aco'];
+function savePatterns() {
+  const out = {};
+  for (const [k, c] of Object.entries(CUSTOM_PATTERNS)) { try { out[k] = c.toDataURL('image/png'); } catch { /* */ } }
+  LS.set('patterns', out);
+}
+export async function loadSavedPatterns() {
+  const saved = LS.get('patterns', {}) || {};
+  for (const [k, url] of Object.entries(saved)) {
+    try { const img = await loadImage(url); const c = makeCanvas(img.width, img.height); ctx2d(c).drawImage(img, 0, 0); CUSTOM_PATTERNS[k] = c; if (!PATTERNS.includes(k)) PATTERNS.push(k); } catch { /* */ }
+  }
+  emit();
+}
+function addPattern(name, canvas) {
+  let c = canvas;
+  if (c.width > 512 || c.height > 512) { const k = 512 / Math.max(c.width, c.height); const t = makeCanvas(Math.round(c.width * k), Math.round(c.height * k)); ctx2d(t).drawImage(c, 0, 0, t.width, t.height); c = t; }
+  let n = name, i = 2; while (PATTERNS.includes(n)) n = `${name} ${i++}`;
+  CUSTOM_PATTERNS[n] = c; PATTERNS.push(n);
+  return n;
+}
+export function defineStylePreset(name) {
+  const d = doc(); if (!d || !d.layer) return;
+  S.stylePresets.push({ name: name || `Stil ${S.stylePresets.length + 1}`, fx: JSON.parse(JSON.stringify(d.layer.fx || {})) });
+  LS.set('stylePresets', S.stylePresets); emit(); toast('Stil gespeichert');
+}
+export function applyStylePreset(i) {
+  const d = doc(); const p = S.stylePresets[i]; if (!d || !p) return;
+  d.layer.fx = JSON.parse(JSON.stringify(p.fx)); d.layer.touch(); view.request(); commit('Stil anwenden');
+}
+export function removeStylePreset(i) { S.stylePresets.splice(i, 1); LS.set('stylePresets', S.stylePresets); emit(); }
+export async function importPresetFiles(files) {
+  const P = await import('./io/presets.js');
+  const msg = [];
+  for (const f of files || []) {
+    const ext = f.name.split('.').pop().toLowerCase(), u8 = new Uint8Array(f.data), base = f.name.replace(/\.[^.]+$/, '');
+    try {
+      if (ext === 'abr') {
+        const { parseAbr } = await import('./io/abr.js'); const { addTipFromAlpha } = await import('./tools.js');
+        let n = 0, last = null; for (const b of parseAbr(u8)) { last = addTipFromAlpha(b.canvas, `${base} – ${b.name}`, b.spacing); n++; }
+        if (last) S.brush.shape = 'custom:' + last;
+        msg.push(`${n} Pinsel`);
+      } else if (ext === 'pat') {
+        const list = P.parsePat(u8); list.forEach((p) => addPattern(p.name, p.canvas)); savePatterns();
+        if (list.length) { S.fill.pattern = PATTERNS[PATTERNS.length - 1]; }
+        msg.push(`${list.length} Muster`);
+      } else if (ext === 'asl') {
+        const { patterns, styles } = P.parseAsl(u8);
+        patterns.forEach((p) => addPattern(p.name, p.canvas)); if (patterns.length) savePatterns();
+        styles.forEach((st) => S.stylePresets.push(st)); LS.set('stylePresets', S.stylePresets);
+        msg.push(`${styles.length} Stile` + (patterns.length ? ` und ${patterns.length} Muster` : ''));
+      } else if (ext === 'grd') {
+        const list = P.parseGrd(u8);
+        for (const g of list) {
+          const alphaAt = (p) => { const o = g.ops; if (!o.length) return 1; if (p <= o[0].p) return o[0].a; for (let i = 1; i < o.length; i++) if (p <= o[i].p) { const t = (p - o[i - 1].p) / ((o[i].p - o[i - 1].p) || 1); return o[i - 1].a + (o[i].a - o[i - 1].a) * t; } return o[o.length - 1].a; };
+          const stops = g.stops.map((st) => { const hx = st.c === 'fg' ? S.fg : st.c === 'bg' ? S.bg : st.c; const a = alphaAt(st.p); const { r, g: gg, b } = hexToRgb(hx); return { p: st.p, c: a >= 0.999 ? hx : `rgba(${r},${gg},${b},${a.toFixed(3)})` }; });
+          if (stops.length) S.gradients.push({ name: g.name, stops: stops.sort((a, b) => a.p - b.p) });
+        }
+        saveSwatches(); msg.push(`${list.length} Verläufe`);
+      } else if (ext === 'aco') {
+        const list = P.parseAco(u8); list.forEach((c) => { if (!S.swatches.includes(c.c)) S.swatches.push(c.c); }); saveSwatches();
+        msg.push(`${list.length} Farbfelder`);
+      }
+    } catch (e) { msg.push(`${f.name}: ${e.message}`); }
+  }
+  emit();
+  if (msg.length) toast('Importiert: ' + msg.join(', '));
+}
+
+// ---------------- Ebenenkompositionen ----------------
+const compState = (d) => Object.fromEntries(d.layers.map((l) => [l.id, { visible: l.visible, opacity: l.opacity, blend: l.blend, fill: l.fill, fx: JSON.parse(JSON.stringify(l.fx || {})) }]));
+export const COMPS = {
+  add(name) { const d = doc(); if (!d) return; d.comps.push({ name: name || `Ebenenkomp. ${d.comps.length + 1}`, state: compState(d) }); commit('Neue Ebenenkomposition'); },
+  apply(i) {
+    const d = doc(); const c = d && d.comps[i]; if (!c) return;
+    for (const l of d.layers) { const st = c.state[l.id]; if (!st) continue; Object.assign(l, { visible: st.visible, opacity: st.opacity, blend: st.blend, fill: st.fill, fx: JSON.parse(JSON.stringify(st.fx || {})) }); l.touch(); }
+    d.compIndex = i; view.request(); commit(`Ebenenkomp. „${c.name}“`);
+  },
+  update(i) { const d = doc(); if (!d || !d.comps[i]) return; d.comps[i].state = compState(d); commit('Ebenenkomp. aktualisieren'); toast('Ebenenkomposition aktualisiert'); },
+  remove(i) { const d = doc(); if (!d) return; d.comps.splice(i, 1); commit('Ebenenkomp. löschen'); },
+  rename(i, n) { const d = doc(); d.comps[i].name = n; commit('Ebenenkomp. umbenennen'); },
+  step(dir) { const d = doc(); if (!d || !d.comps.length) return; const i = ((d.compIndex ?? -1) + dir + d.comps.length) % d.comps.length; COMPS.apply(i); },
+  async exportAll() {
+    const d = doc(); if (!d || !d.comps.length) { toast('Keine Ebenenkompositionen vorhanden'); return; }
+    const before = compState(d), items = [];
+    for (let i = 0; i < d.comps.length; i++) { COMPS.apply(i); items.push({ name: d.comps[i].name, canvas: flattenToCanvas(d) }); }
+    for (const l of d.layers) { const st = before[l.id]; if (st) { Object.assign(l, st); l.touch(); } }
+    view.request(); emit();
+    await exportSet(items, 'png', 'Ebenenkompositionen');
+  },
+};
+
+// Mehrere Bilder in einen Ordner exportieren
+export async function exportSet(items, fmt = 'png', what = 'Bilder', quality = 0.92) {
+  const mime = fmt === 'jpeg' ? 'image/jpeg' : fmt === 'webp' ? 'image/webp' : 'image/png', ext = fmt === 'jpeg' ? 'jpg' : fmt;
+  const safe = (n) => String(n).replace(/[\\/:*?"<>|]/g, '_');
+  let dir = null;
+  if (window.native) { dir = await window.native.chooseFolder({ title: `Zielordner für ${what}` }); if (!dir) return 0; }
+  let n = 0;
+  for (const it of items) {
+    let c = it.canvas;
+    if (fmt === 'jpeg') { const t = makeCanvas(c.width, c.height); const tx = ctx2d(t); tx.fillStyle = '#fff'; tx.fillRect(0, 0, t.width, t.height); tx.drawImage(c, 0, 0); c = t; }
+    const bytes = await canvasToBytes(c, mime, quality);
+    if (dir) await window.native.writeFileIn(dir, `${safe(it.name)}.${ext}`, bytes);
+    else if (!(await saveBytes(`${safe(it.name)}.${ext}`, bytes, [{ name: ext.toUpperCase(), extensions: [ext] }]))) break;
+    n++;
+  }
+  toast(`${n} ${what} exportiert`);
+  return n;
+}
+
+// ---------------- Vektormasken & Pfadoperationen ----------------
+export const VEC = {
+  maskFromPath() {
+    const d = doc(); if (!d) return;
+    const paths = d.activePath != null && d.paths[d.activePath] ? [d.paths[d.activePath]] : d.paths;
+    const ok = paths.filter((p) => p.points && p.points.length > 2);
+    if (!ok.length) { toast('Zuerst mit dem Zeichenstift einen geschlossenen Pfad zeichnen'); return; }
+    d.layer.vmask = { paths: JSON.parse(JSON.stringify(ok)), invert: false, feather: 0, enabled: true };
+    d.layer.touch(); view.request(); commit('Vektormaske hinzufügen');
+  },
+  maskReveal() {
+    const d = doc(); if (!d) return;
+    if (d.selection) { toast('Vektormasken entstehen aus Pfaden – Auswahl ggf. über Pfade-Bedienfeld in Pfad umwandeln'); }
+    VEC.maskFromPath();
+  },
+  toggle() { const d = doc(); const v = d && d.layer.vmask; if (!v) return; v.enabled = v.enabled === false; d.layer.touch(); view.request(); commit(v.enabled ? 'Vektormaske aktivieren' : 'Vektormaske deaktivieren'); },
+  invert() { const d = doc(); const v = d && d.layer.vmask; if (!v) return; v.invert = !v.invert; d.layer.touch(); view.request(); commit('Vektormaske umkehren'); },
+  feather(px) { const d = doc(); const v = d && d.layer.vmask; if (!v) return; v.feather = px; d.layer.touch(); view.request(); commit('Vektormaske weiche Kante'); },
+  remove() { const d = doc(); if (!d || !d.layer.vmask) return; d.layer.vmask = null; d.layer.touch(); view.request(); commit('Vektormaske löschen'); },
+  // Aktive Form-Ebene mit der Form-Ebene darunter verknüpfen
+  combine(op) {
+    const d = doc(); if (!d) return;
+    const top = d.layer, i = d.layers.indexOf(top);
+    let j = i - 1; while (j >= 0 && d.layers[j].parent !== top.parent) j--;
+    const below = d.layers[j];
+    if (!top.shape || !below || !below.shape || top.shape.kind === 'line' || below.shape.kind === 'line') { toast('Benötigt zwei übereinanderliegende Form-Ebenen (Rechteck, Ellipse, Polygon …)'); return; }
+    if (top.shape.rot || below.shape.rot) { toast('Gedrehte Formen können nicht kombiniert werden'); return; }
+    const { parts: tp, ...main } = top.shape;
+    below.shape.parts = [...(below.shape.parts || []), { ...main, op }, ...(tp || []).map((p) => ({ ...p, op: p.op === 'add' ? op : p.op }))];
+    renderShapeLayer(below, d.w, d.h);
+    d.layers.splice(i, 1); d.active = d.layers.indexOf(below);
+    view.request(); commit({ add: 'Formen vereinigen', subtract: 'Vordere Form subtrahieren', intersect: 'Schnittmenge von Formen', exclude: 'Überlappende Formen ausschließen' }[op]);
+  },
+  // Einzelne Eckradien für Rechtecke
+  async cornerRadii() {
+    const d = doc(); const s = d && d.layer.shape;
+    if (!s || (s.kind !== 'rect' && s.kind !== 'rounded')) { toast('Nur für Rechteck-Formen'); return; }
+    const r = s.radii || [s.radius || 0, s.radius || 0, s.radius || 0, s.radius || 0];
+    const v = await askForm('Eckenradien', [
+      { key: 'tl', type: 'num', label: 'Oben links', value: r[0], max: 2000, unit: ' Px' }, { key: 'tr', type: 'num', label: 'Oben rechts', value: r[1], max: 2000, unit: ' Px' },
+      { key: 'br', type: 'num', label: 'Unten rechts', value: r[2], max: 2000, unit: ' Px' }, { key: 'bl', type: 'num', label: 'Unten links', value: r[3], max: 2000, unit: ' Px' },
+    ]);
+    if (!v) return;
+    s.kind = 'rounded'; s.radii = [v.tl, v.tr, v.br, v.bl];
+    renderShapeLayer(d.layer, d.w, d.h); view.request(); commit('Eckenradien');
+  },
+};
+
+// Bereich füllen: KI-Inpainting (LaMa), sonst klassisches inhaltsbasiertes Füllen
+export async function inpaintCanvas(src, mask) {
+  try { const { aiInpaint } = await import('./engine/ai.js'); return await aiInpaint(src, mask); }
+  catch (e) {
+    console.warn('KI-Füllung nicht verfügbar, klassisch', e);
+    const c = cloneCanvas(src);
+    contentAwareFill({ w: c.width, h: c.height }, { canvas: c, ctx: ctx2d(c), touch() {} }, mask);
+    return c;
+  }
+}
+
+// Neues Dokument aus einem Canvas (leer = ohne Ebenen, Aufrufer füllt sie)
+export function newDocFromCanvas(c, name, empty = false) {
+  const d = empty ? new Doc(c.width, c.height, name) : docFromImage(c, name);
+  d.ppi = S.prefs.defaultPpi || 72;
+  addDoc(d);
+  return d;
+}

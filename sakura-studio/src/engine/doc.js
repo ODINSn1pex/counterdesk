@@ -7,18 +7,79 @@ export const newRev = () => revCounter++;
 
 export const BLEND_MODES = [
   ['normal', 'Normal'], ['dissolve', 'Sprenkeln'], null,
-  ['darken', 'Abdunkeln'], ['multiply', 'Multiplizieren'], ['color-burn', 'Farbig nachbelichten'], ['darker-color', 'Dunklere Farbe'], null,
-  ['lighten', 'Aufhellen'], ['screen', 'Negativ multiplizieren'], ['color-dodge', 'Farbig abwedeln'], ['lighter', 'Linear abwedeln (Add.)'], null,
-  ['overlay', 'Ineinanderkopieren'], ['soft-light', 'Weiches Licht'], ['hard-light', 'Hartes Licht'], null,
-  ['difference', 'Differenz'], ['exclusion', 'Ausschluss'], null,
+  ['darken', 'Abdunkeln'], ['multiply', 'Multiplizieren'], ['color-burn', 'Farbig nachbelichten'], ['linear-burn', 'Linear nachbelichten'], ['darker-color', 'Dunklere Farbe'], null,
+  ['lighten', 'Aufhellen'], ['screen', 'Negativ multiplizieren'], ['color-dodge', 'Farbig abwedeln'], ['lighter', 'Linear abwedeln (Add.)'], ['lighter-color', 'Hellere Farbe'], null,
+  ['overlay', 'Ineinanderkopieren'], ['soft-light', 'Weiches Licht'], ['hard-light', 'Hartes Licht'], ['vivid-light', 'Strahlendes Licht'], ['linear-light', 'Lineares Licht'], ['pin-light', 'Lichtpunkt'], ['hard-mix', 'Hart mischen'], null,
+  ['difference', 'Differenz'], ['exclusion', 'Ausschluss'], ['subtract', 'Subtrahieren'], ['divide', 'Dividieren'], null,
   ['hue', 'Farbton'], ['saturation', 'Sättigung'], ['color', 'Farbe'], ['luminosity', 'Luminanz'],
 ];
 
+// Füllmethoden, die Canvas nicht kennt, werden pixelgenau berechnet
+export const CUSTOM_BLENDS = new Set(['linear-burn', 'darker-color', 'lighter-color', 'vivid-light', 'linear-light', 'pin-light', 'hard-mix', 'subtract', 'divide']);
 export function gcoFor(mode) {
-  if (mode === 'dissolve' || mode === 'normal') return 'source-over';
-  if (mode === 'darker-color') return 'darken';
+  if (mode === 'dissolve' || mode === 'normal' || CUSTOM_BLENDS.has(mode)) return 'source-over';
   return mode;
 }
+export function needsPixelBlend(l) {
+  if (CUSTOM_BLENDS.has(l.blend)) return true;
+  const b = l.blendIf; return !!(b && (b.thisLo > 0 || b.thisHi < 255 || b.underLo > 0 || b.underHi < 255));
+}
+const lumOf = (r, g, b) => r * 0.299 + g * 0.587 + b * 0.114;
+function bandWeight(v, lo, hi, soft) {
+  if (v < lo) return soft ? Math.max(0, 1 - (lo - v) / soft) : 0;
+  if (v > hi) return soft ? Math.max(0, 1 - (v - hi) / soft) : 0;
+  return 1;
+}
+function blendChannel(mode, a, b) {
+  switch (mode) {
+    case 'linear-burn': return a + b - 1;
+    case 'linear-light': return a + 2 * b - 1;
+    case 'vivid-light': return b < 0.5 ? (b <= 0 ? 0 : 1 - (1 - a) / (2 * b)) : (b >= 1 ? 1 : a / (2 * (1 - b)));
+    case 'pin-light': return b < 0.5 ? Math.min(a, 2 * b) : Math.max(a, 2 * b - 1);
+    case 'hard-mix': return a + b >= 1 ? 1 : 0;
+    case 'subtract': return a - b;
+    case 'divide': return b <= 0 ? 1 : a / b;
+    default: return b;
+  }
+}
+// src (Canvas) mit Füllmethode/Fülloptionen in Kontext x zeichnen
+export function pixelBlend(x, src, layer, opacity) {
+  const W = x.canvas.width, H = x.canvas.height;
+  const dI = x.getImageData(0, 0, W, H), d = dI.data;
+  const s = src.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+  const mode = layer.blend, bi = layer.blendIf || {};
+  const tLo = bi.thisLo ?? 0, tHi = bi.thisHi ?? 255, uLo = bi.underLo ?? 0, uHi = bi.underHi ?? 255, soft = bi.soft ?? 0;
+  const useIf = needsPixelBlend({ blend: 'normal', blendIf: bi });
+  for (let i = 0; i < d.length; i += 4) {
+    let sa = s[i + 3] / 255 * opacity;
+    if (sa <= 0) continue;
+    const da = d[i + 3] / 255;
+    if (useIf) sa *= bandWeight(lumOf(s[i], s[i + 1], s[i + 2]), tLo, tHi, soft) * (da > 0 ? bandWeight(lumOf(d[i], d[i + 1], d[i + 2]), uLo, uHi, soft) : 1);
+    if (sa <= 0) continue;
+    let r = s[i], g = s[i + 1], b = s[i + 2];
+    if (da > 0 && mode !== 'normal' && CUSTOM_BLENDS.has(mode)) {
+      if (mode === 'darker-color' || mode === 'lighter-color') {
+        const ls = lumOf(r, g, b), ld = lumOf(d[i], d[i + 1], d[i + 2]);
+        if ((mode === 'darker-color') === (ld < ls)) { r = d[i]; g = d[i + 1]; b = d[i + 2]; }
+      } else {
+        r = Math.max(0, Math.min(1, blendChannel(mode, d[i] / 255, r / 255))) * 255;
+        g = Math.max(0, Math.min(1, blendChannel(mode, d[i + 1] / 255, g / 255))) * 255;
+        b = Math.max(0, Math.min(1, blendChannel(mode, d[i + 2] / 255, b / 255))) * 255;
+      }
+      // Ergebnis nur wo Untergrund vorhanden; sonst Quellfarbe
+      r = s[i] + (r - s[i]) * da; g = s[i + 1] + (g - s[i + 1]) * da; b = s[i + 2] + (b - s[i + 2]) * da;
+    }
+    const oa = sa + da * (1 - sa);
+    d[i] = (r * sa + d[i] * da * (1 - sa)) / oa;
+    d[i + 1] = (g * sa + d[i + 1] * da * (1 - sa)) / oa;
+    d[i + 2] = (b * sa + d[i + 2] * da * (1 - sa)) / oa;
+    d[i + 3] = oa * 255;
+  }
+  x.putImageData(dI, 0, 0);
+}
+
+// Globaler Lichteinfall (Ebenenstile) und Musterquelle (aus dem Zustand gesetzt)
+export const FX_ENV = { angle: 120, altitude: 30, pattern: null };
 
 export class Layer {
   constructor(w, h, name) {
@@ -72,6 +133,12 @@ export class Doc {
     this.paths = [];
     this.artboards = []; // Zeichenflächen: { name, x, y, w, h, bg }
     this.frames = [];    // Animation: { vis: {layerId: bool}, delay }
+    this.globalLight = { angle: 120, altitude: 30 }; // Globaler Lichteinfall
+    this.comps = [];     // Ebenenkompositionen
+    this.samplers = [];  // Farbaufnahmepunkte
+    this.counts = [];    // Zählungen
+    this.notes = [];     // Anmerkungen
+    this.slices = [];    // Slices
     this.activePath = -1;
     this.guides = [];
     this.alphaChannels = [];
@@ -143,6 +210,7 @@ export class Doc {
       paths: JSON.parse(JSON.stringify(this.paths)),
       artboards: JSON.parse(JSON.stringify(this.artboards || [])),
       frames: JSON.parse(JSON.stringify(this.frames || [])),
+      extra: JSON.stringify({ globalLight: this.globalLight, comps: this.comps, samplers: this.samplers, counts: this.counts, notes: this.notes, slices: this.slices }),
       alphaChannels: this.alphaChannels.map((a) => ({ name: a.name, canvas: a.canvas })),
     };
   }
@@ -175,6 +243,7 @@ export class Doc {
     this.paths = JSON.parse(JSON.stringify(s.paths));
     this.artboards = JSON.parse(JSON.stringify(s.artboards || []));
     this.frames = JSON.parse(JSON.stringify(s.frames || []));
+    if (s.extra) Object.assign(this, JSON.parse(s.extra));
     this.alphaChannels = s.alphaChannels.map((a) => ({ ...a }));
     this.histIdx = idx;
     this.dirty = true;
@@ -195,10 +264,11 @@ export function layerProps(l) {
     lockPixels: l.lockPixels, lockPosition: l.lockPosition, lockAlpha: l.lockAlpha, lockAll: l.lockAll,
     isBackground: l.isBackground, maskEnabled: l.maskEnabled, editMask: l.editMask, clip: l.clip,
     type: l.type, text: l.text ? { ...l.text } : null, fx: JSON.parse(JSON.stringify(l.fx || {})),
-    parent: l.parent || null, collapsed: !!l.collapsed,
+    parent: l.parent || null, collapsed: !!l.collapsed, blendIf: l.blendIf ? { ...l.blendIf } : null,
     adjust: l.adjust ? JSON.parse(JSON.stringify(l.adjust)) : null,
-    shape: l.shape ? { ...l.shape } : null,
+    shape: l.shape ? JSON.parse(JSON.stringify(l.shape)) : null,
     smart: l.smart ? cloneSmart(l.smart) : null,
+    frame: l.frame ? { ...l.frame } : null, vmask: l.vmask ? JSON.parse(JSON.stringify(l.vmask)) : null,
   };
 }
 
@@ -207,8 +277,11 @@ export function applyLayerProps(l, p) {
   l.text = p.text ? { ...p.text } : null;
   l.fx = JSON.parse(JSON.stringify(p.fx || {}));
   l.adjust = p.adjust ? JSON.parse(JSON.stringify(p.adjust)) : null;
-  l.shape = p.shape ? { ...p.shape } : null;
+  l.shape = p.shape ? JSON.parse(JSON.stringify(p.shape)) : null;
   l.smart = p.smart ? cloneSmart(p.smart) : null;
+  l.blendIf = p.blendIf ? { ...p.blendIf } : null;
+  l.frame = p.frame ? { ...p.frame } : null;
+  l.vmask = p.vmask ? JSON.parse(JSON.stringify(p.vmask)) : null;
   l.parent = p.parent || null;
 }
 
@@ -242,6 +315,30 @@ export function normalizeTree(layers) {
 }
 
 // ---------- Text-Ebenen ----------
+// Zeilenumbruch für Absatztext (Textrahmen) bzw. Punkttext
+export function layoutText(x, t) {
+  const raw = (t.content || '').split('\n').map((s) => (t.caps ? s.toUpperCase() : s));
+  if (!t.box) return raw.map((s) => ({ s, last: true }));
+  const out = [], maxW = Math.max(10, t.box.w);
+  for (const para of raw) {
+    const words = para.split(/(\s+)/).filter((q) => q.length);
+    let line = '';
+    for (const wd of words) {
+      const test = line + wd;
+      if (line && x.measureText(test.trimEnd()).width > maxW && wd.trim()) { out.push({ s: line.trimEnd(), last: false }); line = wd.trimStart(); }
+      else line = test;
+      // einzelnes Wort länger als der Rahmen: hart umbrechen
+      while (x.measureText(line).width > maxW && line.length > 1) {
+        let k = line.length - 1; while (k > 1 && x.measureText(line.slice(0, k)).width > maxW) k--;
+        out.push({ s: line.slice(0, k), last: false }); line = line.slice(k);
+      }
+    }
+    out.push({ s: line.trimEnd(), last: true });
+  }
+  return out;
+}
+const fontOf = (t) => `${t.italic ? 'italic ' : ''}${t.bold ? '700 ' : '400 '}${t.size}px "${t.font}"`;
+
 export function renderTextLayer(layer, w, h) {
   const t = layer.text;
   if (!t) return;
@@ -252,31 +349,76 @@ export function renderTextLayer(layer, w, h) {
   x.save();
   x.fillStyle = t.color;
   x.textBaseline = 'top';
-  x.textAlign = t.align || 'left';
-  const font = `${t.italic ? 'italic ' : ''}${t.bold ? '700 ' : '400 '}${t.size}px "${t.font}"`;
-  x.font = font;
+  x.font = fontOf(t);
   try { x.letterSpacing = (t.tracking || 0) + 'px'; } catch (e) { /* alt */ }
-  const lines = (t.content || '').split('\n');
   const lh = t.size * (t.leading || 1.2);
-  lines.forEach((line, i) => {
-    let s = line;
-    if (t.caps) s = s.toUpperCase();
-    x.fillText(s, t.x, t.y + i * lh);
-    if (t.underline) {
-      const m = x.measureText(s);
-      let lx = t.x;
-      if (x.textAlign === 'center') lx -= m.width / 2; else if (x.textAlign === 'right') lx -= m.width;
-      x.fillRect(lx, t.y + i * lh + t.size * 1.05, m.width, Math.max(1, t.size / 14));
+  const lines = layoutText(x, t);
+  const align = t.align || 'left';
+  if (t.box) { x.beginPath(); x.rect(t.x, t.y, t.box.w, t.box.h); x.clip(); }
+  const anchorX = t.box ? (align === 'center' ? t.x + t.box.w / 2 : align === 'right' ? t.x + t.box.w : t.x) : t.x;
+  lines.forEach((ln, i) => {
+    const y = t.y + i * lh, s = ln.s;
+    if (t.box && align === 'justify' && !ln.last && s.includes(' ')) {
+      // Blocksatz: Wortabstände verteilen
+      const words = s.split(/\s+/), total = words.reduce((a, q) => a + x.measureText(q).width, 0);
+      const gap = (t.box.w - total) / (words.length - 1);
+      x.textAlign = 'left'; let cx = t.x;
+      for (const q of words) { x.fillText(q, cx, y); cx += x.measureText(q).width + gap; }
+    } else {
+      x.textAlign = align === 'justify' ? 'left' : align;
+      x.fillText(s, anchorX, y);
     }
-    if (t.strike) {
+    if (t.underline || t.strike) {
       const m = x.measureText(s);
-      let lx = t.x;
+      let lx = anchorX;
       if (x.textAlign === 'center') lx -= m.width / 2; else if (x.textAlign === 'right') lx -= m.width;
-      x.fillRect(lx, t.y + i * lh + t.size * 0.55, m.width, Math.max(1, t.size / 14));
+      const mw = t.box && align === 'justify' && !ln.last ? t.box.w : m.width;
+      if (t.underline) x.fillRect(lx, y + t.size * 1.05, mw, Math.max(1, t.size / 14));
+      if (t.strike) x.fillRect(lx, y + t.size * 0.55, mw, Math.max(1, t.size / 14));
     }
   });
   x.restore();
+  if (t.warp && t.warp.style && t.warp.style !== 'none' && t.warp.bend) warpText(layer, t, w, h);
   layer.touch();
+}
+
+// Text verkrümmen: spaltenweise Versatz/Skalierung des gerenderten Textes
+export const TEXT_WARPS = [['none', 'Ohne'], ['arc', 'Bogen'], ['arch', 'Torbogen'], ['bulge', 'Wölbung'], ['flag', 'Flagge'], ['wave', 'Welle'], ['fish', 'Fisch'], ['rise', 'Ansteigend'], ['squeeze', 'Stauchen']];
+function warpText(layer, t, w, h) {
+  const b0 = textBoundsRaw(t);
+  const pad = Math.ceil(t.size * 0.4);
+  const bx = Math.max(0, Math.floor(b0.x - pad)), by = Math.max(0, Math.floor(b0.y - pad));
+  const bw = Math.min(w, Math.ceil(b0.x + b0.w + pad)) - bx, bh = Math.min(h, Math.ceil(b0.y + b0.h + pad)) - by;
+  if (bw <= 2 || bh <= 2) return;
+  const src = makeCanvas(bw, bh); ctx2d(src).drawImage(layer.canvas, bx, by, bw, bh, 0, 0, bw, bh);
+  const x = layer.ctx; x.clearRect(bx, by, bw, bh);
+  const k = Math.max(-1, Math.min(1, t.warp.bend / 100)), st = t.warp.style;
+  const step = 2;
+  for (let c = 0; c < bw; c += step) {
+    const u = (c + step / 2) / bw, m = 2 * u - 1, para = 1 - m * m;
+    let dy = 0, sy = 1, top = 0;
+    if (st === 'arc') dy = -k * para * bh * 0.6;
+    else if (st === 'arch') { dy = -k * para * bh * 0.6; sy = 1 + k * para * 0.3; }
+    else if (st === 'bulge') { sy = 1 + k * para * 0.8; top = -(sy - 1) / 2; }
+    else if (st === 'flag') dy = Math.sin(u * Math.PI * 2) * k * bh * 0.25;
+    else if (st === 'wave') { dy = Math.sin(u * Math.PI * 2) * k * bh * 0.25; sy = 1 + Math.cos(u * Math.PI * 2) * k * 0.2; }
+    else if (st === 'fish') { sy = 1 + k * para * 0.6; top = -(sy - 1) * (u < 0.5 ? 0.8 : 0.2); }
+    else if (st === 'rise') dy = -(u - 0.5) * k * bh;
+    else if (st === 'squeeze') { sy = 1 - k * para * 0.5; top = (1 - sy) / 2; }
+    x.drawImage(src, c, 0, step, bh, bx + c, by + dy + top * bh, step, bh * sy);
+  }
+}
+
+function textBoundsRaw(t) {
+  if (t.box) return { x: t.x, y: t.y, w: t.box.w, h: t.box.h };
+  const c = makeCanvas(1, 1).getContext('2d');
+  c.font = fontOf(t);
+  const lines = layoutText(c, t);
+  const w = Math.max(20, ...lines.map((l) => c.measureText(l.s).width));
+  const lh = t.size * (t.leading || 1.2);
+  let x = t.x;
+  if (t.align === 'center') x -= w / 2; else if (t.align === 'right') x -= w;
+  return { x, y: t.y, w, h: lines.length * lh };
 }
 
 // Text entlang einer Polylinie (Text auf Pfad)
@@ -324,14 +466,9 @@ export function textBounds(layer) {
     const x0 = Math.min(...xs) - t.size, y0 = Math.min(...ys) - t.size;
     return { x: x0, y: y0, w: Math.max(...xs) - x0 + t.size, h: Math.max(...ys) - y0 + t.size };
   }
-  const c = makeCanvas(1, 1).getContext('2d');
-  c.font = `${t.italic ? 'italic ' : ''}${t.bold ? '700 ' : '400 '}${t.size}px "${t.font}"`;
-  const lines = (t.content || ' ').split('\n');
-  const w = Math.max(20, ...lines.map((l) => c.measureText(l).width));
-  const lh = t.size * (t.leading || 1.2);
-  let x = t.x;
-  if (t.align === 'center') x -= w / 2; else if (t.align === 'right') x -= w;
-  return { x, y: t.y, w, h: lines.length * lh };
+  const b = textBoundsRaw(t);
+  if (t.warp && t.warp.style && t.warp.style !== 'none' && t.warp.bend) { const e = b.h * Math.abs(t.warp.bend) / 100 * 0.8; return { x: b.x, y: b.y - e, w: b.w, h: b.h + e * 2 }; }
+  return b;
 }
 
 // ---------- Rendering / Zusammensetzen ----------
@@ -363,17 +500,57 @@ function dissolveNoise(w, h) {
 }
 
 // Ebene inkl. Maske, Flächendeckkraft und Ebenenstilen in temp zeichnen
+// Vektormaske: Pfad als scharfe Maske (optional umgekehrt / weiche Kante)
+export function traceVPath(x, path) {
+  const pts = path.points || []; if (!pts.length) return;
+  x.moveTo(pts[0].x, pts[0].y);
+  const seg = (a, b) => x.bezierCurveTo(a.ox ?? a.x, a.oy ?? a.y, b.ix ?? b.x, b.iy ?? b.y, b.x, b.y);
+  for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i]);
+  seg(pts[pts.length - 1], pts[0]); x.closePath();
+}
+function applyVectorMask(cx, vm, w, h) {
+  const m = tmp('vmask', w, h), mx = ctx2d(m);
+  mx.fillStyle = '#fff';
+  if (vm.feather) mx.filter = `blur(${vm.feather}px)`;
+  mx.beginPath(); for (const p of vm.paths || []) traceVPath(mx, p);
+  if (vm.invert) { mx.rect(0, 0, w, h); mx.fill('evenodd'); } else mx.fill('nonzero');
+  mx.filter = 'none';
+  cx.globalCompositeOperation = 'destination-in'; cx.drawImage(m, 0, 0); cx.globalCompositeOperation = 'source-over';
+}
+
+const fxCache = new Map();
 function renderLayerFx(layer, w, h, key) {
   const fx = layer.fx || {};
   const hasFx = Object.values(fx).some((f) => f && f.enabled);
-  const needsMask = layer.mask && layer.maskEnabled;
+  const needsMask = (layer.mask && layer.maskEnabled) || (layer.vmask && layer.vmask.enabled !== false);
   if (!hasFx && !needsMask && layer.fill >= 1 && layer.blend !== 'dissolve') return layer.canvas;
+  // Ergebnis zwischenspeichern (Ebenenstile sind teuer)
+  if (hasFx) {
+    const ck = layer.rev + '|' + JSON.stringify(fx) + '|' + layer.fill + '|' + layer.maskEnabled + '|' + JSON.stringify(layer.vmask || 0) + '|' + FX_ENV.angle + '|' + FX_ENV.altitude + '|' + w + 'x' + h;
+    const e = fxCache.get(layer.id);
+    if (e && e.key === ck) return e.canvas;
+    const res = renderLayerFxInner(layer, w, h, key);
+    let c = e && e.canvas.width === w && e.canvas.height === h ? e.canvas : makeCanvas(w, h);
+    const cx2 = ctx2d(c); cx2.clearRect(0, 0, w, h); cx2.drawImage(res, 0, 0);
+    fxCache.set(layer.id, { key: ck, canvas: c });
+    if (fxCache.size > 80) fxCache.delete(fxCache.keys().next().value);
+    return c;
+  }
+  return renderLayerFxInner(layer, w, h, key);
+}
+// Mehrere Instanzen desselben Stils: shadow, shadow2, shadow3 …
+export const inst = (fx, k) => Object.keys(fx).filter((n) => n.replace(/\d+$/, '') === k && fx[n] && fx[n].enabled).map((n) => fx[n]);
+const angleOf = (f) => (f.useGlobal !== false ? FX_ENV.angle : (f.angle ?? 120)) * Math.PI / 180;
 
-  // Inhalt (mit Maske)
+function renderLayerFxInner(layer, w, h, key) {
+  const fx = layer.fx || {};
+  const hasFx = Object.values(fx).some((f) => f && f.enabled);
+  // Inhalt (mit Ebenen- und Vektormaske)
   const content = tmp(key + 'c', w, h);
   const cx = ctx2d(content);
   cx.drawImage(layer.canvas, 0, 0);
-  if (needsMask) { cx.globalCompositeOperation = 'destination-in'; cx.drawImage(layer.mask, 0, 0); cx.globalCompositeOperation = 'source-over'; }
+  if (layer.mask && layer.maskEnabled) { cx.globalCompositeOperation = 'destination-in'; cx.drawImage(layer.mask, 0, 0); cx.globalCompositeOperation = 'source-over'; }
+  if (layer.vmask && layer.vmask.enabled !== false) applyVectorMask(cx, layer.vmask, w, h);
   if (layer.blend === 'dissolve') {
     cx.globalCompositeOperation = 'destination-in';
     cx.drawImage(dissolveNoise(w, h), 0, 0);
@@ -394,9 +571,8 @@ function renderLayerFx(layer, w, h, key) {
     return s;
   };
 
-  if (fx.shadow && fx.shadow.enabled) {
-    const f = fx.shadow;
-    const ang = (f.angle ?? 120) * Math.PI / 180;
+  for (const f of inst(fx, 'shadow')) {
+    const ang = angleOf(f);
     const s = sil(f.color || '#000');
     ox.save();
     ox.globalAlpha = f.opacity ?? 0.75;
@@ -404,8 +580,7 @@ function renderLayerFx(layer, w, h, key) {
     ox.drawImage(s, -Math.cos(ang) * (f.distance ?? 8), Math.sin(ang) * (f.distance ?? 8));
     ox.restore();
   }
-  if (fx.glow && fx.glow.enabled) {
-    const f = fx.glow;
+  for (const f of inst(fx, 'glow')) {
     const s = sil(f.color || '#ffd0ea');
     ox.save();
     ox.globalAlpha = f.opacity ?? 0.8;
@@ -413,8 +588,7 @@ function renderLayerFx(layer, w, h, key) {
     for (let i = 0; i < 2; i++) { ox.filter = `blur(${(f.size ?? 12) / 2}px)`; ox.drawImage(s, 0, 0); }
     ox.restore();
   }
-  if (fx.stroke && fx.stroke.enabled) {
-    const f = fx.stroke;
+  for (const f of inst(fx, 'stroke')) {
     const s = sil(f.color || '#ffffff');
     const r = f.size ?? 3;
     ox.save();
@@ -431,8 +605,7 @@ function renderLayerFx(layer, w, h, key) {
   }
   // Inhalt mit Flächendeckkraft
   let body = content;
-  if (fx.overlay && fx.overlay.enabled) {
-    const f = fx.overlay;
+  for (const f of inst(fx, 'overlay')) {
     const b = tmp(key + 'b', w, h);
     const bx = ctx2d(b);
     bx.drawImage(content, 0, 0);
@@ -442,20 +615,87 @@ function renderLayerFx(layer, w, h, key) {
     bx.fillRect(0, 0, w, h);
     body = b;
   }
-  if (fx.gradient && fx.gradient.enabled) {
-    const f = fx.gradient;
+  for (const f of inst(fx, 'gradient')) {
     const b = tmp(key + 'g', w, h);
     const bx = ctx2d(b);
     bx.drawImage(body, 0, 0);
     bx.globalAlpha = f.opacity ?? 1;
     bx.globalCompositeOperation = 'source-atop';
-    const g = bx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, f.color1 || '#ff9ad5'); g.addColorStop(1, f.color2 || '#6a3fa0');
+    const ga = ((f.angle ?? 90) - 90) * Math.PI / 180, R = Math.hypot(w, h) / 2;
+    const g = f.style === 'radial' ? bx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, R) : bx.createLinearGradient(w / 2 - Math.sin(-ga) * R, h / 2 - Math.cos(ga) * R, w / 2 + Math.sin(-ga) * R, h / 2 + Math.cos(ga) * R);
+    g.addColorStop(f.reverse ? 1 : 0, f.color1 || '#ff9ad5'); g.addColorStop(f.reverse ? 0 : 1, f.color2 || '#6a3fa0');
     bx.fillStyle = g; bx.fillRect(0, 0, w, h);
     body = b;
   }
-  if (fx.inner && fx.inner.enabled) {
-    const f = fx.inner;
+  if (fx.pattern && fx.pattern.enabled && FX_ENV.pattern) {
+    const f = fx.pattern;
+    const b = tmp(key + 'p', w, h); const bx = ctx2d(b);
+    bx.drawImage(body, 0, 0);
+    const pc = FX_ENV.pattern(f.name || 'sakura', f.scale || 1);
+    if (pc) { bx.globalAlpha = f.opacity ?? 1; bx.globalCompositeOperation = 'source-atop'; bx.fillStyle = bx.createPattern(pc, 'repeat'); bx.fillRect(0, 0, w, h); }
+    body = b;
+  }
+  if (fx.satin && fx.satin.enabled) {
+    // Glanz: zwei versetzte, weichgezeichnete Silhouetten, deren Differenz eingefärbt wird
+    const f = fx.satin, ang = angleOf({ ...f, useGlobal: false }), dd = f.distance ?? 11;
+    const a1 = tmp(key + 'sa', w, h), ax = ctx2d(a1);
+    ax.filter = `blur(${(f.size ?? 14) / 2}px)`;
+    ax.drawImage(content, Math.cos(ang) * dd, Math.sin(ang) * dd);
+    ax.globalCompositeOperation = 'xor'; ax.drawImage(content, -Math.cos(ang) * dd, -Math.sin(ang) * dd);
+    ax.filter = 'none'; ax.globalCompositeOperation = 'source-in'; ax.fillStyle = f.color || '#000'; ax.fillRect(0, 0, w, h);
+    const b = tmp(key + 'sb', w, h); const bx = ctx2d(b);
+    bx.drawImage(body, 0, 0); bx.globalAlpha = f.opacity ?? 0.5; bx.globalCompositeOperation = 'source-atop'; bx.drawImage(a1, 0, 0);
+    body = b;
+  }
+  if (fx.innerGlow && fx.innerGlow.enabled) {
+    const f = fx.innerGlow;
+    const b = tmp(key + 'ig', w, h); const bx = ctx2d(b);
+    bx.drawImage(body, 0, 0);
+    const inv = tmp(key + 'iv', w, h); const ix = ctx2d(inv);
+    ix.fillStyle = f.color || '#fff6c8'; ix.fillRect(0, 0, w, h);
+    ix.globalCompositeOperation = 'destination-out'; ix.drawImage(content, 0, 0);
+    bx.save(); bx.globalCompositeOperation = 'source-atop'; bx.globalAlpha = f.opacity ?? 0.75;
+    bx.filter = `blur(${(f.size ?? 10) / 2}px)`; bx.drawImage(inv, 0, 0); bx.drawImage(inv, 0, 0); bx.restore();
+    body = b;
+  }
+  if (fx.bevel && fx.bevel.enabled) {
+    // Abgeflachte Kante und Relief: Höhenfeld aus weichgezeichneter Kontur, beleuchtet aus dem Lichtwinkel
+    const f = fx.bevel, size = Math.max(1, f.size ?? 6), depth = (f.depth ?? 100) / 100;
+    const hm = tmp(key + 'hm', w, h), hx = ctx2d(hm);
+    hx.filter = `blur(${size / 2}px)`;
+    if (f.style === 'outer') { hx.fillStyle = '#000'; hx.fillRect(0, 0, w, h); }
+    hx.drawImage(content, 0, 0); hx.filter = 'none';
+    const H = hx.getImageData(0, 0, w, h).data;
+    const ang = angleOf(f), alt = (f.useGlobal !== false ? FX_ENV.altitude : (f.altitude ?? 30)) * Math.PI / 180;
+    const lx = Math.cos(ang) * Math.cos(alt), ly = -Math.sin(ang) * Math.cos(alt), lz = Math.sin(alt);
+    const lightC = makeCanvas(w, h), lc = ctx2d(lightC), lid = lc.createImageData(w, h), L = lid.data;
+    const darkC = makeCanvas(w, h), dc = ctx2d(darkC), did = dc.createImageData(w, h), D = did.data;
+    const hi = hexToRgb(f.highlight || '#ffffff'), sh = hexToRgb(f.shadow || '#000000');
+    const k = depth * 255 / size * 4;
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const i = (y * w + x) * 4;
+      const nx = -(H[i + 7] - H[i - 1]) / k, ny = -(H[i + w * 4 + 3] - H[i - w * 4 + 3]) / k;
+      const len = Math.hypot(nx, ny, 1), dot = (nx * lx + ny * ly + lz) / len - lz;
+      if (dot > 0.01) { L[i] = hi.r; L[i + 1] = hi.g; L[i + 2] = hi.b; L[i + 3] = Math.min(255, dot * 255 * 2.2); }
+      else if (dot < -0.01) { D[i] = sh.r; D[i + 1] = sh.g; D[i + 2] = sh.b; D[i + 3] = Math.min(255, -dot * 255 * 2.2); }
+    }
+    lc.putImageData(lid, 0, 0); dc.putImageData(did, 0, 0);
+    const b = tmp(key + 'bv', w, h); const bx = ctx2d(b);
+    bx.drawImage(body, 0, 0);
+    if (f.style === 'outer' || f.style === 'emboss' || f.style === 'pillow') {
+      // außerhalb sichtbar: unter den Inhalt legen
+      const o2 = tmp(key + 'bo', w, h), ox2 = ctx2d(o2);
+      ox2.globalAlpha = f.opacity ?? 0.75; ox2.drawImage(lightC, 0, 0); ox2.drawImage(darkC, 0, 0); ox2.globalAlpha = 1;
+      if (f.style === 'outer') { ox2.globalCompositeOperation = 'destination-out'; ox2.drawImage(content, 0, 0); }
+      ox.drawImage(o2, 0, 0);
+    }
+    if (f.style !== 'outer') {
+      bx.globalCompositeOperation = 'source-atop'; bx.globalAlpha = f.opacity ?? 0.75;
+      bx.drawImage(lightC, 0, 0); bx.drawImage(darkC, 0, 0);
+    }
+    body = b;
+  }
+  for (const f of inst(fx, 'inner')) {
     const b = tmp(key + 'i', w, h);
     const bx = ctx2d(b);
     bx.drawImage(body, 0, 0);
@@ -477,7 +717,7 @@ function renderLayerFx(layer, w, h, key) {
 // Signatur einer Ebenenliste (Inhalt + Eigenschaften) für Caches
 export function layerSig(layers) {
   let out = '';
-  for (const l of layers) out += l.id + ':' + l.rev + ':' + (l.visible ? 1 : 0) + ':' + l.opacity + ':' + l.blend + ':' + l.fill + ':' + (l.clip ? 1 : 0) + ':' + (l.maskEnabled ? 1 : 0) + ':' + (l.mask ? 1 : 0) + ':' + JSON.stringify(l.fx || {}) + ':' + (l.parent || '') + (l.adjust ? JSON.stringify(l.adjust) : '') + '|';
+  for (const l of layers) out += l.id + ':' + l.rev + ':' + (l.visible ? 1 : 0) + ':' + l.opacity + ':' + l.blend + ':' + l.fill + ':' + (l.clip ? 1 : 0) + ':' + (l.maskEnabled ? 1 : 0) + ':' + (l.mask ? 1 : 0) + ':' + JSON.stringify(l.fx || {}) + ':' + (l.parent || '') + (l.adjust ? JSON.stringify(l.adjust) : '') + (l.blendIf ? JSON.stringify(l.blendIf) : '') + '|';
   return out;
 }
 
@@ -556,6 +796,7 @@ function drawNodes(all, nodes, x, w, h, opts, depth, key) {
     } else if (!node.clip) {
       base = node.type === 'group' ? src : node.canvas;
     }
+    if (needsPixelBlend(node)) { pixelBlend(x, src, node, node.opacity * (node.type === 'group' ? node.fill : 1)); acc += subtreeSig(all, node); return; }
     x.globalAlpha = node.opacity * (node.type === 'group' ? node.fill : 1);
     x.globalCompositeOperation = gcoFor(node.blend === 'pass' ? 'normal' : node.blend);
     x.drawImage(src, 0, 0);
@@ -571,6 +812,12 @@ function drawLayers(layers, x, w, h, opts = {}, key = 'flat') {
   x.globalCompositeOperation = 'source-over';
 }
 
+// Einzelne Ebene (inkl. Stile/Masken) als Bild rendern
+export function renderLayerAlone(l, w, h) {
+  const c = makeCanvas(w, h); drawLayers([{ ...l, parent: null, visible: true, opacity: 1, blend: 'normal', clip: false, canvas: l.canvas, mask: l.mask, fx: l.fx, type: l.type, id: l.id, rev: l.rev }], ctx2d(c), w, h, { forceAll: true }, 'alone' + l.id);
+  return c;
+}
+
 const compCache = new WeakMap();
 function cacheFor(doc) {
   let c = compCache.get(doc);
@@ -582,6 +829,7 @@ function cacheFor(doc) {
 // sodass beim Malen nur die aktive Ebene neu zusammengesetzt werden muss.
 export function composite(doc, target, opts = {}) {
   const { w, h } = doc;
+  if (doc.globalLight) { FX_ENV.angle = doc.globalLight.angle; FX_ENV.altitude = doc.globalLight.altitude; }
   const x = target.getContext('2d');
   x.save();
   x.setTransform(1, 0, 0, 1, 0, 0);
@@ -594,10 +842,10 @@ export function composite(doc, target, opts = {}) {
     const cache = cacheFor(doc);
     const below = L.slice(0, a), above = L.slice(a + 1);
     const okBelow = !below.length || (cache.below && cache.belowSig === w + 'x' + h + '#' + layerSig(below));
-    const simpleAbove = above.every((l) => !l.visible || (l.blend === 'normal' && l.type !== 'adjust'));
+    const simpleAbove = above.every((l) => !l.visible || (l.blend === 'normal' && l.type !== 'adjust' && !needsPixelBlend(l)));
     const okAbove = !above.length || (simpleAbove && cache.above && cache.aboveSig === w + 'x' + h + '#' + layerSig(above));
     const act = L[a];
-    const plainActive = act.type !== 'adjust' && !(act.mask && act.maskEnabled) && act.fill >= 1 && act.blend !== 'dissolve' && !Object.values(act.fx || {}).some((f) => f && f.enabled);
+    const plainActive = act.type !== 'adjust' && !needsPixelBlend(act) && !(act.mask && act.maskEnabled) && !act.vmask && act.fill >= 1 && act.blend !== 'dissolve' && !Object.values(act.fx || {}).some((f) => f && f.enabled);
     if (okBelow && okAbove && plainActive) {
       const r = opts.rect;
       const rx = Math.max(0, Math.floor(r.x)), ry = Math.max(0, Math.floor(r.y));

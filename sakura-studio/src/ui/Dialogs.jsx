@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { S, emit, useStore, doc, view, commit, closeDialog, newDocument, IMAGE, EDIT, SELECT, VIEW, exportImage, closeDoc, savePrefs, saveSwatches, setFg, setBg, saveProject, DEFAULT_PREFS, ACCENTS, resetToolOptions, restoreRecovery, L, toast } from '../state.js';
+import { S, emit, useStore, doc, view, commit, closeDialog, newDocument, IMAGE, EDIT, SELECT, VIEW, exportImage, closeDoc, savePrefs, saveSwatches, setFg, setBg, saveProject, DEFAULT_PREFS, ACCENTS, resetToolOptions, restoreRecovery, L, toast, PATTERNS } from '../state.js';
 import { feather as selFeather, expand as selExpand, contract as selContract, smooth as selSmooth } from '../engine/selection.js';
 import { cloneCanvas } from '../engine/util.js';
 import { LiquifyDialog } from './dialogs/Liquify.jsx';
 import { RawDialog } from './dialogs/RawDialog.jsx';
+import { FormDialog } from './dialogs/FormDialog.jsx';
+import { BrushSettingsDialog } from './dialogs/BrushSettings.jsx';
 import { ADJUSTMENTS, FILTERS, histogram, curveLut } from '../engine/filters.js';
 import { BLEND_MODES } from '../engine/doc.js';
 import { beginPreview, previewFilter, showOriginal, finishFilter, cancelPreview } from './dialogs/applyFilter.js';
@@ -13,7 +15,7 @@ import { allShortcuts } from '../commands.js';
 import { Blossom, Icon, Logo } from './icons.jsx';
 import { hexToRgb, rgbToHex, rgbToHsv, hsvToRgb } from '../engine/util.js';
 
-function Modal({ title, children, onOk, onCancel, okLabel = 'OK', width = 420, extra }) {
+export function Modal({ title, children, onOk, onCancel, okLabel = 'OK', width = 420, extra }) {
   const ref = useRef(null);
   const cb = useRef({});
   cb.current = { onOk, onCancel };
@@ -56,7 +58,7 @@ export function Dialogs() {
     new: NewDocDialog, filter: FilterDialog, imageSize: ImageSizeDialog, canvasSize: CanvasSizeDialog, fill: FillDialog, stroke: StrokeDialog,
     export: ExportDialog, modifySel: ModifySelDialog, colorRange: ColorRangeDialog, layerStyle: LayerStyleDialog, colorPicker: ColorPickerDialog,
     shortcuts: ShortcutsDialog, prefs: PrefsDialog, about: AboutDialog, confirmClose: ConfirmCloseDialog, guide: GuideDialog, histogram: HistogramDialog,
-    gradientEditor: GradientEditorDialog, features: FeaturesDialog, appClose: AppCloseDialog, selectMask: SelectMaskDialog, recovery: RecoveryDialog, liquify: LiquifyDialog, batch: BatchDialog, raw: RawDialog, artboard: ArtboardDialog, animExport: AnimExportDialog, genfill: GenFillDialog, help: HelpDialog,
+    gradientEditor: GradientEditorDialog, features: FeaturesDialog, appClose: AppCloseDialog, selectMask: SelectMaskDialog, recovery: RecoveryDialog, liquify: LiquifyDialog, batch: BatchDialog, raw: RawDialog, artboard: ArtboardDialog, animExport: AnimExportDialog, genfill: GenFillDialog, help: HelpDialog, form: FormDialog, brushSettings: BrushSettingsDialog,
   }[dg.type];
   return C ? <C dg={dg} key={dg.type + (dg.id || '') + (dg.tab || '')} /> : null;
 }
@@ -327,50 +329,90 @@ function ColorRangeDialog() {
 
 // ---------------- Ebenenstil ----------------
 const FX_DEFS = {
-  shadow: { name: 'Schlagschatten', def: { enabled: true, color: '#000000', opacity: 0.75, angle: 120, distance: 10, size: 12 } },
+  bevel: { name: 'Abgeflachte Kante und Relief', def: { enabled: true, style: 'inner', depth: 100, size: 6, highlight: '#ffffff', shadow: '#000000', opacity: 0.75, useGlobal: true, angle: 120, altitude: 30 } },
+  stroke: { name: 'Kontur', multi: true, def: { enabled: true, color: '#ffffff', opacity: 1, size: 3 } },
+  inner: { name: 'Schatten nach innen', multi: true, def: { enabled: true, color: '#000000', opacity: 0.6, size: 10 } },
+  innerGlow: { name: 'Schein nach innen', def: { enabled: true, color: '#fff6c8', opacity: 0.75, size: 10 } },
+  satin: { name: 'Glanz', def: { enabled: true, color: '#000000', opacity: 0.5, angle: 19, distance: 11, size: 14 } },
+  overlay: { name: 'Farbüberlagerung', multi: true, def: { enabled: true, color: '#e57fb8', opacity: 1 } },
+  gradient: { name: 'Verlaufsüberlagerung', multi: true, def: { enabled: true, color1: '#ffd6ec', color2: '#6a3fa0', opacity: 1, angle: 90, style: 'linear', reverse: false } },
+  pattern: { name: 'Musterüberlagerung', def: { enabled: true, name: 'sakura', scale: 1, opacity: 1 } },
   glow: { name: 'Schein nach außen', def: { enabled: true, color: '#ffc1e3', opacity: 0.8, size: 18 } },
-  stroke: { name: 'Kontur', def: { enabled: true, color: '#ffffff', opacity: 1, size: 3 } },
-  inner: { name: 'Schatten nach innen', def: { enabled: true, color: '#000000', opacity: 0.6, size: 10 } },
-  overlay: { name: 'Farbüberlagerung', def: { enabled: true, color: '#e57fb8', opacity: 1 } },
-  gradient: { name: 'Verlaufsüberlagerung', def: { enabled: true, color1: '#ffd6ec', color2: '#6a3fa0', opacity: 1 } },
+  shadow: { name: 'Schlagschatten', multi: true, def: { enabled: true, color: '#000000', opacity: 0.75, useGlobal: true, angle: 120, distance: 10, size: 12 } },
 };
+const fxBase = (k) => k.replace(/\d+$/, '');
+const fxLabel = (k) => FX_DEFS[fxBase(k)].name + (/\d$/.test(k) ? ' ' + k.match(/\d+$/)[0] : '');
 function LayerStyleDialog({ dg }) {
   const d = doc(); const l = d.layer;
-  const orig = useRef({ fx: JSON.parse(JSON.stringify(l.fx || {})), blend: l.blend, opacity: l.opacity, fill: l.fill });
-  const [tab, setTab] = useState(dg.tab || 'shadow');
+  const orig = useRef({ fx: JSON.parse(JSON.stringify(l.fx || {})), blend: l.blend, opacity: l.opacity, fill: l.fill, blendIf: l.blendIf ? { ...l.blendIf } : null, light: { ...d.globalLight } });
+  const [tab, setTab] = useState(dg.tab || 'blend');
   const [, force] = useState(0);
-  useEffect(() => { if (tab !== 'blend' && !l.fx[tab]) { l.fx[tab] = { ...FX_DEFS[tab].def }; upd(); } }, [tab]);
+  useEffect(() => { if (tab !== 'blend' && !l.fx[tab]) { l.fx[tab] = { ...FX_DEFS[fxBase(tab)].def }; upd(); } }, [tab]);
   const upd = () => { l.touch(); view.request(); force((x) => x + 1); emit(); };
   const f = l.fx[tab];
   const set = (k) => (v) => { f[k] = v; upd(); };
-  const cancel = () => { Object.assign(l, { fx: orig.current.fx, blend: orig.current.blend, opacity: orig.current.opacity, fill: orig.current.fill }); upd(); closeDialog(); };
+  const cancel = () => { Object.assign(l, { fx: orig.current.fx, blend: orig.current.blend, opacity: orig.current.opacity, fill: orig.current.fill, blendIf: orig.current.blendIf }); d.globalLight = orig.current.light; upd(); closeDialog(); };
   const ok = () => { closeDialog(); commit('Ebenenstil'); };
+  // Liste: jeder Stil, darunter weitere Instanzen
+  const keys = [];
+  for (const k of Object.keys(FX_DEFS)) { keys.push(k); Object.keys(l.fx).filter((n) => n !== k && fxBase(n) === k).sort().forEach((n) => keys.push(n)); }
+  const addInst = (k) => { let i = 2; while (l.fx[k + i]) i++; l.fx[k + i] = { ...(l.fx[k] || FX_DEFS[k].def), enabled: true }; setTab(k + i); upd(); };
+  const delInst = (k) => { delete l.fx[k]; setTab(fxBase(k)); upd(); };
+  const bi = l.blendIf || { thisLo: 0, thisHi: 255, underLo: 0, underHi: 255, soft: 0 };
+  const setBi = (k) => (v) => { l.blendIf = { ...bi, [k]: v }; upd(); };
+  const light = d.globalLight || { angle: 120, altitude: 30 };
+  const setLight = (k) => (v) => { d.globalLight = { ...light, [k]: v }; upd(); };
+  const usesLight = f && 'useGlobal' in f;
   return (
-    <Modal title={`Ebenenstil – ${l.name}`} onOk={ok} onCancel={cancel} width={600}>
+    <Modal title={`Ebenenstil – ${l.name}`} onOk={ok} onCancel={cancel} width={640}>
       <div className="ls">
         <div className="ls-list">
           <button className={tab === 'blend' ? 'on' : ''} onClick={() => setTab('blend')}>Fülloptionen</button>
-          {Object.entries(FX_DEFS).map(([k, v]) => (
+          {keys.map((k) => (
             <div key={k} className={'ls-item' + (tab === k ? ' on' : '')}>
-              <input type="checkbox" checked={!!(l.fx[k] && l.fx[k].enabled)} onChange={(e) => { if (!l.fx[k]) l.fx[k] = { ...v.def }; l.fx[k].enabled = e.target.checked; upd(); }} />
-              <button onClick={() => setTab(k)}>{v.name}</button>
+              <input type="checkbox" checked={!!(l.fx[k] && l.fx[k].enabled)} onChange={(e) => { if (!l.fx[k]) l.fx[k] = { ...FX_DEFS[fxBase(k)].def }; l.fx[k].enabled = e.target.checked; upd(); }} />
+              <button onClick={() => setTab(k)}>{fxLabel(k)}</button>
+              {FX_DEFS[fxBase(k)].multi && (k === fxBase(k)
+                ? <button className="ls-add" title="Weitere Instanz hinzufügen" onClick={() => addInst(k)}>+</button>
+                : <button className="ls-add" title="Instanz entfernen" onClick={() => delInst(k)}>−</button>)}
             </div>
           ))}
         </div>
         <div className="ls-body">
           {tab === 'blend' ? <>
+            <h4>Allgemeine Füllmethode</h4>
             <label className="prow"><span>Füllmethode</span><Sel value={l.blend} onChange={(v) => { l.blend = v; upd(); }} options={BLEND_MODES} width={200} /></label>
             <Num label="Deckkraft" value={Math.round(l.opacity * 100)} onChange={(v) => { l.opacity = v / 100; upd(); }} unit="%" />
+            <h4>Erweiterte Füllmethode</h4>
             <Num label="Flächendeckkraft" value={Math.round(l.fill * 100)} onChange={(v) => { l.fill = v / 100; upd(); }} unit="%" />
             <Check label="Schnittmaske (an Ebene darunter)" value={l.clip} onChange={(v) => { l.clip = v; upd(); }} />
+            <h4>Farbbereich (Helligkeit)</h4>
+            <div className="hint">Blendet Pixel dieser Ebene aus, deren Helligkeit (oder die der darunterliegenden Pixel) außerhalb des Bereichs liegt.</div>
+            <div className="bi-row"><span>Diese Ebene</span><Num label="von" value={bi.thisLo} max={255} onChange={setBi('thisLo')} /><Num label="bis" value={bi.thisHi} max={255} onChange={setBi('thisHi')} /></div>
+            <div className="bi-bar" style={{ '--lo': bi.thisLo / 2.55 + '%', '--hi': bi.thisHi / 2.55 + '%' }} />
+            <div className="bi-row"><span>Darunter liegende Ebene</span><Num label="von" value={bi.underLo} max={255} onChange={setBi('underLo')} /><Num label="bis" value={bi.underHi} max={255} onChange={setBi('underHi')} /></div>
+            <div className="bi-bar" style={{ '--lo': bi.underLo / 2.55 + '%', '--hi': bi.underHi / 2.55 + '%' }} />
+            <Num label="Weicher Übergang" value={bi.soft} max={128} onChange={setBi('soft')} />
+            <h4>Globaler Lichteinfall</h4>
+            <Num label="Winkel" value={light.angle} min={-180} max={180} onChange={setLight('angle')} unit="°" />
+            <Num label="Höhe" value={light.altitude} min={0} max={90} onChange={setLight('altitude')} unit="°" />
           </> : f ? <>
-            <h4>{FX_DEFS[tab].name}</h4>
+            <h4>{fxLabel(tab)}</h4>
+            {'style' in f && fxBase(tab) === 'bevel' && <label className="prow"><span>Stil</span><Sel value={f.style} onChange={set('style')} options={[['inner', 'Abgeflachte Kante innen'], ['outer', 'Abgeflachte Kante außen'], ['emboss', 'Relief'], ['pillow', 'Relief an allen Kanten']]} width={200} /></label>}
+            {'style' in f && fxBase(tab) === 'gradient' && <label className="prow"><span>Art</span><Sel value={f.style} onChange={set('style')} options={[['linear', 'Linear'], ['radial', 'Radial']]} width={120} /></label>}
             {'color' in f && <label className="prow"><span>Farbe</span><input type="color" className="color-in" value={f.color} onChange={(e) => set('color')(e.target.value)} /></label>}
+            {'highlight' in f && <label className="prow"><span>Lichter / Tiefen</span><input type="color" className="color-in" value={f.highlight} onChange={(e) => set('highlight')(e.target.value)} /><input type="color" className="color-in" value={f.shadow} onChange={(e) => set('shadow')(e.target.value)} /></label>}
             {'color1' in f && <label className="prow"><span>Verlauf</span><input type="color" className="color-in" value={f.color1} onChange={(e) => set('color1')(e.target.value)} /><input type="color" className="color-in" value={f.color2} onChange={(e) => set('color2')(e.target.value)} /></label>}
+            {'name' in f && <label className="prow"><span>Muster</span><Sel value={f.name} onChange={set('name')} options={PATTERNS.map((p) => [p, p])} width={160} /></label>}
             <Num label="Deckkraft" value={Math.round(f.opacity * 100)} onChange={(v) => set('opacity')(v / 100)} unit="%" />
-            {'angle' in f && <Num label="Winkel" value={f.angle} min={-180} max={180} onChange={set('angle')} unit="°" />}
+            {'depth' in f && <Num label="Tiefe" value={f.depth} min={1} max={1000} onChange={set('depth')} unit="%" />}
+            {'scale' in f && <Num label="Skalieren" value={Math.round(f.scale * 100)} min={10} max={1000} onChange={(v) => set('scale')(v / 100)} unit="%" />}
+            {usesLight && <Check label="Globalen Lichteinfall verwenden" value={f.useGlobal !== false} onChange={set('useGlobal')} />}
+            {'angle' in f && <Num label="Winkel" value={usesLight && f.useGlobal !== false ? light.angle : f.angle} min={-180} max={180} onChange={usesLight && f.useGlobal !== false ? setLight('angle') : set('angle')} unit="°" />}
+            {'altitude' in f && <Num label="Höhe" value={f.useGlobal !== false ? light.altitude : f.altitude} min={0} max={90} onChange={f.useGlobal !== false ? setLight('altitude') : set('altitude')} unit="°" />}
             {'distance' in f && <Num label="Distanz" value={f.distance} min={0} max={300} onChange={set('distance')} unit=" Px" />}
             {'size' in f && <Num label="Größe" value={f.size} min={0} max={250} onChange={set('size')} unit=" Px" />}
+            {'reverse' in f && <Check label="Umkehren" value={f.reverse} onChange={set('reverse')} />}
           </> : null}
         </div>
       </div>
@@ -533,6 +575,8 @@ function PrefsDialog({ dg }) {
             <Row label="Zoom"><Check label="Animiertes Zoomen" value={p.animatedZoom} onChange={set('animatedZoom')} /></Row>
             <Row label="Malwerkzeug-Cursor"><Sel value={p.brushCursor} onChange={set('brushCursor')} options={[['normal', 'Pinselspitze (Kreis)'], ['both', 'Pinselspitze + Fadenkreuz'], ['cross', 'Präzise (Fadenkreuz)']]} width={240} /></Row>
             <Row label="Grafiktablett"><Check label="Stiftdruck steuert Größe" value={p.pressureSize} onChange={set('pressureSize')} /><Check label="Stiftdruck steuert Deckkraft" value={p.pressureOpacity} onChange={set('pressureOpacity')} /></Row>
+            <Row label="Text"><Check label="Rechtschreibprüfung beim Schreiben (Rechtsklick zeigt Vorschläge)" value={p.spellcheck !== false} onChange={set('spellcheck')} /></Row>
+            <Row label="Markierungen"><Check label="Zählungen immer anzeigen" value={p.showCounts !== false} onChange={set('showCounts')} /></Row>
             <Row label="Transformieren" hint="Umschalttaste kehrt das Verhalten jeweils um."><Check label="Ecken proportional skalieren" value={p.proportionalTransform} onChange={set('proportionalTransform')} /></Row>
             <Row label="Pfeiltasten"><Num label="Umschalt + Pfeil:" value={p.nudgeStep} min={2} max={200} onChange={set('nudgeStep')} unit=" Px" width={56} /></Row>
             <Row label="Einrasten"><Num label="Abstand:" value={p.snapDistance} min={1} max={30} onChange={set('snapDistance')} unit=" Px" width={50} /></Row>
@@ -774,7 +818,7 @@ function AboutDialog() {
       <div className="about">
         <Logo size={64} />
         <h2>Lumora</h2>
-        <div>Version 3.0.0 · Bildbearbeitung für Windows</div>
+        <div>Version 4.0.0 · Bildbearbeitung für Windows</div>
         <p>Ebenen, Masken, Auswahlen, Pinsel, Retusche, Text, Formen, Pfade, über 50 Korrekturen & Filter, PSD-Import/-Export und mehr.</p>
         <p className="muted">Arbeitsordner: Desktop\Lumora\Projekte · Einstellungen: Bearbeiten › Voreinstellungen (Strg+K)</p>
         <details className="licenses"><summary>Open-Source-Komponenten</summary>
@@ -792,13 +836,14 @@ function FeaturesDialog() {
   const groups = [
     ['Datei', 'Neu (Vorlagen), Öffnen (PNG, JPG, WebP, GIF, BMP, SVG, PSD, .lumora), Zuletzt geöffnet, Speichern als Projekt, PSD mit Ebenen speichern, Export PNG/JPG/WebP mit Qualität & Skalierung, Ebenen als Dateien exportieren, Platzieren, Drag & Drop, Drucken'],
     ['Entfernen & Freistellen', 'Markierte Bereiche mit KI entfernen (LaMa-Modell, lokal), Entfernen-Werkzeug zum Übermalen, Hintergrund entfernen als Maske, Motiv/Auswahl in neue Ebene ausschneiden oder kopieren, schwebende Aktionsleiste'],
-    ['Neu in 3.0', 'Echte RAW-Entwicklung (LibRaw: Weißabgleich, Belichtung, Lichter, Rauschreduzierung, Demosaicing), Photoshop-Pinsel (.abr), Zeichenflächen, CMYK-TIFF-Export und TIFF-Import, Zeitleiste mit GIF-/MP4-/WebM-Export, generative Füllung (OpenAI, eigener Schlüssel), Plugin-Schnittstelle, Funktionslexikon (F1), Tutorial mit 55 Schritten'],
+    ['Neu in 4.0', 'Pinsel-Engine (F5) mit Struktur, Dualem Pinsel, Farb- und Transfer-Jitter, Symmetrie/Mandala und Misch-Pinsel; Ebenenstile Abgeflachte Kante und Relief, Glanz, Schein nach innen, Musterüberlagerung, mehrere Konturen/Schatten, globaler Lichteinfall; Fülloptionen „Farbbereich“; 9 zusätzliche exakte Füllmethoden (Linear nachbelichten, Strahlendes/Lineares Licht, Lichtpunkt, Hart mischen, Subtrahieren, Dividieren, Hellere/Dunklere Farbe); Ausbessern-Werkzeug, Inhaltsbasiert verschieben und skalieren, Generativ erweitern (lokale KI), Himmel austauschen, Hochskalieren; Absatztext mit Blocksatz, Text verkrümmen, Zeichen-/Absatzformate, Rechtschreibprüfung, Suchen & Ersetzen; Vektormasken, Formen kombinieren, Eckradien einzeln; Photomerge, HDR-Zusammenfügung, Ebenen automatisch ausrichten/überblenden (Fokus-Stacking); Import von .pat, .asl, .grd, .aco; Export als SVG, PDF, mehrere Größen und Slices; Farbaufnahme-, Zählungs-, Anmerkungs-, Slice- und Rahmenwerkzeug; Ebenenkompositionen; Stile-Bedienfeld; Tutorial mit 61 Schritten'],
+    ['Neu in 3.0', 'Echte RAW-Entwicklung (LibRaw: Weißabgleich, Belichtung, Lichter, Rauschreduzierung, Demosaicing), Photoshop-Pinsel (.abr), Zeichenflächen, CMYK-TIFF-Export und TIFF-Import, Zeitleiste mit GIF-/MP4-/WebM-Export, generative Füllung (OpenAI, eigener Schlüssel), Plugin-Schnittstelle, Funktionslexikon (F1)'],
     ['Nicht-destruktiv', 'Einstellungsebenen (15 Korrekturen, jederzeit änderbar, mit Maske und Schnittmaske), Ebenengruppen (verschachtelt, Hindurchwirken, Gruppenmaske, Ein-/Ausklappen, Drag & Drop), Vektor-Formebenen (Farbe, Kontur, Radius, Seiten nachträglich änderbar), Smart-Objekte (verlustfreies Skalieren/Drehen/Verformen, Smartfilter ein-/ausschaltbar, Inhalt bearbeiten/ersetzen)'],
     ['KI (lokal, offline)', 'Motiv auswählen, Objektauswahl und Hintergrund entfernen mit neuronalen Netzen (Anime-/Illustrationsmodell und Fotomodell enthalten, hochwertiges Fotomodell nachladbar)'],
     ['Verformen', 'Verzerren, Perspektive, Verformen (Bézier-Gitter), Formgitter mit Pins, Verflüssigen (Krümmen, Rekonstruieren, Glätten, Strudel, Zusammenziehen, Aufblasen)'],
     ['Automatisierung', 'Aktionen aufzeichnen/abspielen (Schritte ein-/ausschaltbar), Stapelverarbeitung ganzer Ordner, eigene Pinselspitzen aus Auswahl oder Bild, Text auf Pfad'],
     ['Druck & Formate', 'CMYK-Proof und Farbumfang-Warnung (Näherung), PSD mit Gruppen, Text und Einstellungsebenen lesen/schreiben, RAW-Dateien (eingebettete Kameravorschau), AVIF'],
-    ['Ebenen', 'Neue Ebene, Ebene durch Kopie/Ausschneiden, Duplizieren, Löschen, 19 Füllmethoden, Deckkraft, Flächendeckkraft, 4 Fixierungen, Ebenenmasken (malen, umkehren, anwenden), Schnittmasken, Füllebenen (Farbe/Verlauf/Muster), Anordnen, Ausrichten, Reduzieren, Sichtbare stempeln, Ebenenstile (Schlagschatten, Schein, Kontur, Schatten innen, Farb- und Verlaufsüberlagerung)'],
+    ['Ebenen', 'Neue Ebene, Ebene durch Kopie/Ausschneiden, Duplizieren, Löschen, 28 Füllmethoden, Deckkraft, Flächendeckkraft, 4 Fixierungen, Ebenenmasken (malen, umkehren, anwenden), Schnittmasken, Füllebenen (Farbe/Verlauf/Muster), Anordnen, Ausrichten, Reduzieren, Sichtbare stempeln, Ebenenstile (Schlagschatten, Schein, Kontur, Schatten innen, Farb- und Verlaufsüberlagerung)'],
     ['Auswahl', 'Rechteck, Ellipse, Zeile, Spalte, Lasso, Polygon-Lasso, Schnellauswahl, Zauberstab, Objektauswahl, Motiv, Farbbereich, Hinzufügen/Subtrahieren/Schnittmenge, Weiche Kante, Erweitern, Verkleinern, Abrunden, Umrandung, Umkehren, Erneut auswählen, Maskierungsmodus, Auswahl speichern/laden (Alphakanäle)'],
     ['Malen & Retusche', 'Pinsel (Größe, Härte, Winkel, Rundheit, Abstand, Streuung, Jitter, Glättung, Stifdruck), Buntstift, Farbe ersetzen, Radiergummi, Hintergrund-Radiergummi, Magischer Radiergummi, Verlauf (5 Arten), Füllwerkzeug, Kopierstempel, Musterstempel, Protokollpinsel, Bereichsreparatur, Reparatur-Pinsel, Rote Augen, Weichzeichner, Scharfzeichner, Wischfinger, Abwedler, Nachbelichter, Schwamm'],
     ['Transformieren', 'Frei transformieren (Skalieren, Drehen, Neigen, Spiegeln), 90°/180°, Bildgröße, Arbeitsfläche, Bilddrehung, Freistellen mit Seitenverhältnis, Zuschneiden, Gerade ausrichten mit Lineal'],

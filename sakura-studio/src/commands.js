@@ -6,7 +6,7 @@ import {
 } from './state.js';
 import { ADJUSTMENTS, FILTERS } from './engine/filters.js';
 import { PATHS, alignLayer, nudge, cancelOp, finishPoly, finishPath, textOnPath, definePresetFromSelection, makeTipFromCanvas } from './tools.js';
-import { ADJ_LAYER_TYPES, ARTBOARDS } from './state.js';
+import { ADJ_LAYER_TYPES, ARTBOARDS, importPresetFiles, defineStylePreset, askForm, VEC, COMPS } from './state.js';
 import { PLUGIN_COMMANDS, PLUGIN_FILTERS, PLUGIN_ERRORS, loadPlugins } from './plugins.js';
 
 const hasDoc = () => !!doc();
@@ -31,6 +31,10 @@ import { applyFilterToLayer } from './ui/dialogs/applyFilter.js';
 const filterGroups = {};
 Object.entries(FILTERS).forEach(([id, f]) => { (filterGroups[f.group] = filterGroups[f.group] || []).push({ label: f.name, run: () => runFilter(id), enabled: hasDoc }); });
 
+const ADV = (fn, ...a) => () => import('./advanced.js').then((m) => m[fn](...a));
+const TXT = (fn, ...a) => () => import('./textTools.js').then((m) => m[fn](...a));
+const isShape = () => doc() && doc().layer.type === 'shape';
+
 export const MENUS = [
   {
     id: 'file', label: 'Datei', items: [
@@ -52,6 +56,17 @@ export const MENUS = [
         { label: 'Animation (GIF/Video)…', run: () => openDialog('animExport'), enabled: () => doc() && (doc().frames || []).length > 0 },
         { label: 'Als CMYK-TIFF für den Druck…', run: () => import('./state.js').then((m) => m.exportTiff(true, 300)), enabled: hasDoc },
         { label: 'Zeichenflächen als Dateien…', run: () => ARTBOARDS.exportAll('png'), enabled: () => doc() && (doc().artboards || []).length > 0 },
+        '-',
+        { label: 'Mehrere Größen (1x/2x/3x)…', run: ADV('exportMultiSize'), enabled: hasDoc },
+        { label: 'Slices exportieren…', run: ADV('exportSlices'), enabled: () => doc() && (doc().slices || []).length > 0 },
+        { label: 'Ebenenkompositionen in Dateien…', run: () => COMPS.exportAll(), enabled: () => doc() && (doc().comps || []).length > 0 },
+        { label: 'Als SVG…', run: ADV('exportSvg'), enabled: hasDoc },
+        { label: 'Als PDF…', run: ADV('exportPdf'), enabled: hasDoc },
+      ] },
+      { label: 'Automatisieren', sub: [
+        { label: 'Stapelverarbeitung…', run: () => (window.native ? openDialog('batch') : toast('Nur in der Desktop-App')) },
+        { label: 'Photomerge (Panorama)…', run: ADV('photomerge') },
+        { label: 'Zu HDR zusammenfügen…', run: ADV('mergeHdr') },
       ] },
       { label: 'Platzieren…', run: placeFile, enabled: hasDoc },
       '-',
@@ -79,6 +94,9 @@ export const MENUS = [
       { label: 'Kontur füllen…', run: () => openDialog('stroke'), enabled: hasSel },
       { label: 'Inhaltsbasierte Füllung', run: () => EDIT.fill('content'), enabled: hasSel },
       { label: 'Generative Füllung (KI, online)…', run: () => openDialog('genfill'), enabled: hasSel },
+      { label: 'Inhaltsbasiert skalieren…', key: 'Alt+Umschalt+Strg+C', run: ADV('contentAwareScale'), enabled: hasDoc },
+      { label: 'Himmel austauschen…', run: ADV('replaceSky'), enabled: hasDoc },
+      { label: 'Text suchen und ersetzen…', run: TXT('findReplace'), enabled: hasDoc },
       '-',
       { label: 'Frei transformieren', key: 'Strg+T', run: () => startTransform(), enabled: hasDoc },
       { label: 'Transformieren', sub: [
@@ -94,14 +112,17 @@ export const MENUS = [
         { label: 'Horizontal spiegeln', run: () => transformLayer('fh'), enabled: hasDoc },
         { label: 'Vertikal spiegeln', run: () => transformLayer('fv'), enabled: hasDoc },
       ] },
-      { label: 'Ebenen automatisch ausrichten', sub: [
+      { label: 'Ebenen automatisch ausrichten (Bildinhalt)', run: ADV('autoAlignLayers'), enabled: hasDoc },
+      { label: 'Ebenen automatisch überblenden…', run: ADV('autoBlendLayers'), enabled: hasDoc },
+      { label: 'Ebenen an Kanten ausrichten', sub: [
         { label: 'Linke Kanten', run: () => alignLayer('left') }, { label: 'Horizontale Mitte', run: () => alignLayer('hcenter') }, { label: 'Rechte Kanten', run: () => alignLayer('right') },
         { label: 'Oberkanten', run: () => alignLayer('top') }, { label: 'Vertikale Mitte', run: () => alignLayer('vcenter') }, { label: 'Unterkanten', run: () => alignLayer('bottom') },
       ] },
       '-',
       { label: 'Pinselvorgabe festlegen (aus Auswahl)…', run: definePresetFromSelection, enabled: hasDoc },
       { label: 'Pinselspitze aus Bild importieren…', run: importBrushImage },
-      { label: 'Photoshop-Pinsel importieren (.abr)…', run: importAbr },
+      { label: 'Vorgaben importieren (.abr, .pat, .asl, .grd, .aco)…', run: importPresets },
+      { label: 'Ebenenstil als Vorgabe speichern…', run: async () => { const v = await askForm('Ebenenstil speichern', [{ key: 'name', label: 'Name', value: 'Mein Stil' }]); if (v && v.name) defineStylePreset(v.name); }, enabled: hasDoc },
       { label: 'Farbfelder & Verläufe zurücksetzen', run: () => { localStorage.removeItem('sakura.swatches'); localStorage.removeItem('sakura.gradients'); toast('Wird beim nächsten Start zurückgesetzt'); } },
       { label: 'Tastaturbefehle…', key: 'Alt+Umschalt+Strg+K', run: () => openDialog('shortcuts') },
       { label: 'Voreinstellungen…', key: 'Strg+K', run: () => openDialog('prefs') },
@@ -130,6 +151,8 @@ export const MENUS = [
       '-',
       { label: 'Bildgröße…', key: 'Alt+Strg+I', run: () => openDialog('imageSize'), enabled: hasDoc },
       { label: 'Arbeitsfläche…', key: 'Alt+Strg+C', run: () => openDialog('canvasSize'), enabled: hasDoc },
+      { label: 'Generativ erweitern (KI)…', run: ADV('generativeExpand'), enabled: hasDoc },
+      { label: 'Hochskalieren (Details erhalten)…', run: ADV('upscaleImage'), enabled: hasDoc },
       { label: 'Bilddrehung', sub: [
         { label: '180°', run: () => IMAGE.rotate(180), enabled: hasDoc },
         { label: '90° im UZS', run: () => IMAGE.rotate(90), enabled: hasDoc },
@@ -163,10 +186,14 @@ export const MENUS = [
       { label: 'Ebenenstil', sub: [
         { label: 'Fülloptionen…', run: () => openDialog('layerStyle', { tab: 'blend' }), enabled: hasDoc },
         '-',
+        { label: 'Abgeflachte Kante und Relief…', run: () => openDialog('layerStyle', { tab: 'bevel' }), enabled: hasDoc },
         { label: 'Kontur…', run: () => openDialog('layerStyle', { tab: 'stroke' }), enabled: hasDoc },
         { label: 'Schatten nach innen…', run: () => openDialog('layerStyle', { tab: 'inner' }), enabled: hasDoc },
+        { label: 'Schein nach innen…', run: () => openDialog('layerStyle', { tab: 'innerGlow' }), enabled: hasDoc },
+        { label: 'Glanz…', run: () => openDialog('layerStyle', { tab: 'satin' }), enabled: hasDoc },
         { label: 'Farbüberlagerung…', run: () => openDialog('layerStyle', { tab: 'overlay' }), enabled: hasDoc },
         { label: 'Verlaufsüberlagerung…', run: () => openDialog('layerStyle', { tab: 'gradient' }), enabled: hasDoc },
+        { label: 'Musterüberlagerung…', run: () => openDialog('layerStyle', { tab: 'pattern' }), enabled: hasDoc },
         { label: 'Schein nach außen…', run: () => openDialog('layerStyle', { tab: 'glow' }), enabled: hasDoc },
         { label: 'Schlagschatten…', run: () => openDialog('layerStyle', { tab: 'shadow' }), enabled: hasDoc },
         '-',
@@ -186,6 +213,29 @@ export const MENUS = [
         { label: 'Löschen', run: L.deleteMask, enabled: () => doc() && !!doc().layer.mask },
         { label: 'Anwenden', run: L.applyMask, enabled: () => doc() && !!doc().layer.mask },
         { label: 'Umkehren', run: L.invertMask, enabled: () => doc() && !!doc().layer.mask },
+      ] },
+      { label: 'Vektormaske', sub: [
+        { label: 'Aus aktuellem Pfad', run: VEC.maskFromPath, enabled: () => doc() && doc().paths.some((p) => p.points.length > 2) },
+        '-',
+        { label: () => (doc() && doc().layer.vmask && doc().layer.vmask.enabled === false ? 'Aktivieren' : 'Deaktivieren'), run: VEC.toggle, enabled: () => doc() && !!doc().layer.vmask },
+        { label: 'Umkehren', run: VEC.invert, enabled: () => doc() && !!doc().layer.vmask },
+        { label: 'Weiche Kante…', run: async () => { const v = await askForm('Vektormaske: weiche Kante', [{ key: 'f', type: 'num', label: 'Radius', max: 250, unit: ' Px', value: (doc().layer.vmask.feather || 0) }]); if (v) VEC.feather(v.f); }, enabled: () => doc() && !!doc().layer.vmask },
+        { label: 'Löschen', run: VEC.remove, enabled: () => doc() && !!doc().layer.vmask },
+      ] },
+      { label: 'Formen kombinieren (mit Form darunter)', sub: [
+        { label: 'Formen vereinigen', run: () => VEC.combine('add'), enabled: isShape },
+        { label: 'Vordere Form subtrahieren', run: () => VEC.combine('subtract'), enabled: isShape },
+        { label: 'Schnittmenge von Formbereichen', run: () => VEC.combine('intersect'), enabled: isShape },
+        { label: 'Überlappende Formbereiche ausschließen', run: () => VEC.combine('exclude'), enabled: isShape },
+        '-',
+        { label: 'Eckenradien einzeln…', run: VEC.cornerRadii, enabled: isShape },
+      ] },
+      { label: 'Bild in Rahmen platzieren…', run: ADV('placeIntoFrame'), enabled: () => doc() && !!doc().layer.frame },
+      { label: 'Ebenenkompositionen', sub: [
+        { label: 'Neue Ebenenkomposition', run: () => COMPS.add(), enabled: hasDoc },
+        { label: 'Vorherige', run: () => COMPS.step(-1), enabled: () => doc() && doc().comps.length > 0 },
+        { label: 'Nächste', run: () => COMPS.step(1), enabled: () => doc() && doc().comps.length > 0 },
+        { label: 'Bedienfeld anzeigen', run: () => showPanel('props', 'comps') },
       ] },
       { label: 'Schnittmaske erstellen', key: 'Alt+Strg+G', run: L.toggleClip, enabled: hasDoc },
       { label: 'Hintergrund entfernen (KI)', run: L.removeBackground, enabled: hasDoc },
@@ -296,6 +346,11 @@ export const MENUS = [
       { label: () => (S.ui.showRulers ? '✓ ' : '') + 'Lineale', key: 'Strg+R', run: () => VIEW.toggle('showRulers') },
       { label: () => (S.ui.showGrid ? '✓ ' : '') + 'Raster', key: "Strg+'", run: () => VIEW.toggle('showGrid') },
       { label: () => (S.ui.showGuides ? '✓ ' : '') + 'Hilfslinien', key: 'Strg+,', run: () => VIEW.toggle('showGuides') },
+      { label: () => (S.ui.showSlices ? '✓ ' : '') + 'Slices', run: () => { S.ui.showSlices = !S.ui.showSlices; view.overlay(); emit(); } },
+      { label: 'Slices aus Hilfslinien', run: ADV('slicesFromGuides'), enabled: hasDoc },
+      { label: 'Slices löschen', run: ADV('clearSlices'), enabled: () => doc() && (doc().slices || []).length > 0 },
+      { label: 'Zählungen löschen', run: () => { const d = doc(); d.counts = []; view.overlay(); import('./state.js').then((m) => m.commit('Zählungen löschen')); }, enabled: () => doc() && (doc().counts || []).length > 0 },
+      { label: 'Farbaufnahmepunkte löschen', run: () => { const d = doc(); d.samplers = []; view.overlay(); import('./state.js').then((m) => m.commit('Farbaufnahmen löschen')); }, enabled: () => doc() && (doc().samplers || []).length > 0 },
       { label: () => (S.ui.snap ? '✓ ' : '') + 'Ausrichten (Einrasten)', key: 'Umschalt+Strg+,', run: () => VIEW.toggle('snap') },
       '-',
       { label: 'Neue Hilfslinie…', run: () => openDialog('guide'), enabled: hasDoc },
@@ -304,14 +359,15 @@ export const MENUS = [
   },
   {
     id: 'window', label: 'Fenster', items: [
-      ...[['color', 'Farbe'], ['swatches', 'Farbfelder'], ['gradients', 'Verläufe'], ['patterns', 'Muster']].map(([k, n]) => ({ label: n, run: () => showPanel('color', k) })),
+      ...[['color', 'Farbe'], ['swatches', 'Farbfelder'], ['gradients', 'Verläufe'], ['patterns', 'Muster'], ['styles', 'Stile']].map(([k, n]) => ({ label: n, run: () => showPanel('color', k) })),
       '-',
-      ...[['props', 'Eigenschaften'], ['adjust', 'Korrekturen'], ['libs', 'Bibliotheken']].map(([k, n]) => ({ label: n, run: () => showPanel('props', k) })),
+      ...[['props', 'Eigenschaften'], ['adjust', 'Korrekturen'], ['comps', 'Ebenenkompositionen'], ['notes', 'Anmerkungen'], ['libs', 'Bibliotheken']].map(([k, n]) => ({ label: n, run: () => showPanel('props', k) })),
       '-',
       ...[['layers', 'Ebenen'], ['channels', 'Kanäle'], ['paths', 'Pfade']].map(([k, n]) => ({ label: n, key: k === 'layers' ? 'F7' : undefined, run: () => showPanel('layers', k) })),
       '-',
       ...[['history', 'Protokoll'], ['actions', 'Aktionen'], ['navigator', 'Navigator'], ['info', 'Info'], ['brushes', 'Pinsel'], ['character', 'Zeichen'], ['paragraph', 'Absatz']].map(([k, n]) => ({ label: n, run: () => { S.ui.flyout = S.ui.flyout === k ? null : k; emit(); } })),
       '-',
+      { label: 'Pinseleinstellungen', key: 'F5', run: () => openDialog('brushSettings') },
       { label: () => (S.ui.timeline ? '✓ ' : '') + 'Zeitleiste (Animation)', run: () => { S.ui.timeline = !S.ui.timeline; emit(); } },
       '-',
       { label: 'Arbeitsbereich zurücksetzen', run: () => { S.ui.hiddenPanels = {}; S.ui.flyout = null; localStorage.removeItem('sakura.hiddenPanels'); emit(); } },
@@ -334,20 +390,12 @@ export const MENUS = [
   },
 ];
 
-async function importAbr() {
+async function importPresets() {
   let files;
-  if (window.native) files = await window.native.openDialog({ title: 'Photoshop-Pinsel importieren', filters: [{ name: 'Photoshop-Pinsel', extensions: ['abr'] }], multi: true });
-  else files = await new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.accept = '.abr'; i.multiple = true; i.onchange = async () => res(await Promise.all([...i.files].map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })))); i.click(); });
-  const { parseAbr } = await import('./io/abr.js');
-  const { addTipFromAlpha } = await import('./tools.js');
-  let n = 0, last = null;
-  for (const f of files || []) {
-    try { for (const b of parseAbr(new Uint8Array(f.data))) { last = addTipFromAlpha(b.canvas, `${f.name.replace(/\.abr$/i, '')} – ${b.name}`, b.spacing); n++; } }
-    catch (e) { toast(`${f.name}: ${e.message}`); }
-  }
-  if (last) { Object.assign(S.brush, { shape: 'custom:' + last }); setTool('brush', 'brush'); }
-  if (n) toast(`${n} Pinsel importiert – im Pinsel-Menü der Optionsleiste`);
-  else if (files && files.length) toast('Keine importierbaren Pinsel gefunden (nur Pinsel mit Bildspitze werden unterstützt)');
+  const ext = ['abr', 'pat', 'asl', 'grd', 'aco'];
+  if (window.native) files = await window.native.openDialog({ title: 'Photoshop-Vorgaben importieren', filters: [{ name: 'Pinsel, Muster, Stile, Verläufe, Farbfelder', extensions: ext }], multi: true });
+  else files = await new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.accept = ext.map((e) => '.' + e).join(','); i.multiple = true; i.onchange = async () => res(await Promise.all([...i.files].map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })))); i.click(); });
+  if (files && files.length) await importPresetFiles(files);
 }
 
 async function importBrushImage() {

@@ -1,5 +1,6 @@
 // Führt Filter im Worker aus (Fallback: Hauptthread)
 import { ADJUSTMENTS, FILTERS } from './filters.js';
+import { HEAVY } from './heavy.js';
 import FilterWorker from './filterWorker.js?worker&inline';
 
 let worker = null, broken = false, seq = 1;
@@ -22,7 +23,7 @@ function getWorker() {
 }
 
 function runLocal(kind, fid, params, src) {
-  const def = (kind === 'adjust' ? ADJUSTMENTS : FILTERS)[fid];
+  const def = (kind === 'adjust' ? ADJUSTMENTS : kind === 'heavy' ? HEAVY : FILTERS)[fid];
   return def.apply(src, params);
 }
 

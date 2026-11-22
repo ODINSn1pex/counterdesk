@@ -1,3 +1,4 @@
+import { StylesPanel, CompsPanel, NotesPanel } from './PanelsExtra.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { S, emit, useStore, useCursor, doc, view, commit, setFg, setBg, L, SELECT, openDialog, saveSwatches, setLayerProp, commitLater, PATTERNS, patternCanvas, toast, IMAGE, EDIT, ADJ_LAYER_TYPES, renderShapeLayer, startTransform } from '../state.js';
 import { ADJUSTMENTS, FILTERS } from '../engine/filters.js';
@@ -37,11 +38,11 @@ export function RightPanels() {
   useStore();
   return (
     <div className="right-col">
-      <PanelGroup id="color" tut="panel-color" tabs={[['color', 'Farbe'], ['swatches', 'Farbfelder'], ['gradients', 'Verläufe'], ['patterns', 'Muster']]}>
-        {(t) => t === 'color' ? <ColorPanel /> : t === 'swatches' ? <SwatchesPanel /> : t === 'gradients' ? <GradientsPanel /> : <PatternsPanel />}
+      <PanelGroup id="color" tut="panel-color" tabs={[['color', 'Farbe'], ['swatches', 'Farbfelder'], ['gradients', 'Verläufe'], ['patterns', 'Muster'], ['styles', 'Stile']]}>
+        {(t) => t === 'color' ? <ColorPanel /> : t === 'swatches' ? <SwatchesPanel /> : t === 'gradients' ? <GradientsPanel /> : t === 'styles' ? <StylesPanel /> : <PatternsPanel />}
       </PanelGroup>
-      <PanelGroup id="props" tut="panel-props" tabs={[['props', 'Eigenschaften'], ['adjust', 'Korrekturen'], ['libs', 'Bibliotheken']]}>
-        {(t) => t === 'props' ? <PropertiesPanel /> : t === 'adjust' ? <AdjustPanel /> : <LibrariesPanel />}
+      <PanelGroup id="props" tut="panel-props" tabs={[['props', 'Eigenschaften'], ['adjust', 'Korrekturen'], ['comps', 'Komp.'], ['notes', 'Notizen'], ['libs', 'Bibliotheken']]}>
+        {(t) => t === 'props' ? <PropertiesPanel /> : t === 'adjust' ? <AdjustPanel /> : t === 'comps' ? <CompsPanel /> : t === 'notes' ? <NotesPanel /> : <LibrariesPanel />}
       </PanelGroup>
       <PanelGroup id="layers" grow tut="panel-layers" tabs={[['layers', 'Ebenen'], ['channels', 'Kanäle'], ['paths', 'Pfade']]}>
         {(t) => t === 'layers' ? <LayersPanel /> : t === 'channels' ? <ChannelsPanel /> : <PathsPanel />}
@@ -192,7 +193,10 @@ function ShapeLayerProps({ l }) {
         <Num label="Stärke" value={s.lineWidth} min={1} max={500} onChange={(v) => set('lineWidth', v)} unit=" Px" width={44} />
         <Check label="Pfeilspitze" value={!!s.arrow} onChange={(v) => set('arrow', v)} />
       </div>}
-      {s.kind === 'rounded' && <Num label="Eckenradius" value={s.radius} min={0} max={2000} onChange={(v) => set('radius', v)} unit=" Px" width={50} />}
+      {(s.kind === 'rounded' || s.kind === 'rect') && !s.radii && <div className="row"><Num label="Eckenradius" value={s.radius || 0} min={0} max={2000} onChange={(v) => { if (s.kind === 'rect') set('kind', 'rounded'); set('radius', v); }} unit=" Px" width={50} />
+        <button className="btn small" title="Jede Ecke einzeln" onClick={() => { const r = s.radius || 0; set('kind', 'rounded'); set('radii', [r, r, r, r]); }}>Einzeln</button></div>}
+      {s.radii && <div className="row">{['↖', '↗', '↘', '↙'].map((n, i) => <Num key={i} label={n} value={s.radii[i] || 0} min={0} max={2000} onChange={(v) => { const r = [...s.radii]; r[i] = v; set('radii', r); }} width={38} />)}
+        <button className="btn small" title="Gemeinsamer Radius" onClick={() => set('radii', null)}>⛓</button></div>}
       {(s.kind === 'polygon' || s.kind === 'star') && <Num label="Seiten" value={s.sides} min={3} max={64} onChange={(v) => set('sides', v)} width={40} />}
       {s.kind === 'star' && <Num label="Einzug" value={Math.round(s.starInner * 100)} min={5} max={95} onChange={(v) => set('starInner', v / 100)} unit="%" width={40} />}
       <button className="btn small" onClick={() => L.rasterize()}>Form rastern</button>
@@ -702,6 +706,12 @@ function InfoPanel() {
       <div className="info-row"><b>RGB</b> {rgb} {hex && <span className="swatch-inline" style={{ background: hex, verticalAlign: 'middle' }} />}</div>
       <div className="info-row"><b>X/Y</b> {c.inside ? `${fmtUnit(c.x, d)}, ${fmtUnit(c.y, d)}` : '—'}</div>
       <div className="info-row"><b>Dok</b> {d.w} × {d.h} Px · {d.layers.length} Ebenen · {d.history.length} Schritte</div>
+      {d.samplers.length > 0 && view.comp && view.comp.width === d.w && d.samplers.map((sp, i) => {
+        const p = view.comp.getContext('2d').getImageData(Math.min(d.w - 1, Math.floor(sp.x)), Math.min(d.h - 1, Math.floor(sp.y)), 1, 1).data;
+        const hx = '#' + [p[0], p[1], p[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+        return <div key={i} className="info-row"><b>#{i + 1}</b> R {p[0]} G {p[1]} B {p[2]} <span className="swatch-inline" style={{ background: hx, verticalAlign: 'middle' }} /> <span className="hint">{hx}</span></div>;
+      })}
+      {d.counts.length > 0 && <div className="info-row"><b>Zählung</b> {d.counts.length}</div>}
       <div className="hint">Histogramm der aktiven Ebene</div>
       <svg className="histo" viewBox="0 0 256 80" preserveAspectRatio="none">
         <path d={'M0 80 ' + Array.from(h.l).map((v, i) => `L${i} ${80 - (v / max) * 78}`).join(' ') + ' L255 80Z'} fill="var(--accent)" opacity="0.65" />
@@ -745,6 +755,26 @@ function CharacterPanel() {
         ))}
       </div>
       {!tl && <div className="hint">Einstellungen gelten für den nächsten Text (T).</div>}
+      <TextStylesBlock kind="char" />
+    </div>
+  );
+}
+
+function TextStylesBlock({ kind }) {
+  const [mod, setMod] = useState(null);
+  useEffect(() => { import('../textTools.js').then(setMod); }, []);
+  if (!mod) return null;
+  const list = mod.textStyles().map((s, i) => [s, i]).filter(([s]) => s.kind === kind);
+  return (
+    <div className="tstyles">
+      <div className="hint">{kind === 'para' ? 'Absatzformate' : 'Zeichenformate'}</div>
+      {list.map(([s, i]) => (
+        <div key={i} className="comp-row" onClick={() => mod.applyTextStyle(i)}>
+          <span className="comp-name" style={{ fontFamily: s.props.font, fontWeight: s.props.bold ? 700 : 400, fontStyle: s.props.italic ? 'italic' : 'normal' }}>{s.name}</span>
+          <button title="Löschen" onClick={(e) => { e.stopPropagation(); mod.removeTextStyle(i); }}>✕</button>
+        </div>
+      ))}
+      <button className="btn small" onClick={() => mod.saveTextStyle(kind)}>+ {kind === 'para' ? 'Absatzformat' : 'Zeichenformat'} aus Auswahl</button>
     </div>
   );
 }
@@ -760,8 +790,15 @@ function ParagraphPanel() {
         {[['left', 'alignL', 'Linksbündig'], ['center', 'alignHC', 'Zentriert'], ['right', 'alignR', 'Rechtsbündig']].map(([a, ic, t]) => (
           <button key={a} title={t} className={v === a ? 'on' : ''} onClick={() => { S.text.align = a; if (tl) updateTextLayer(tl, { align: a }); emit(); }}><Icon name={ic} size={16} /></button>
         ))}
+        <button title="Blocksatz" className={v === 'justify' ? 'on' : ''} onClick={() => { S.text.align = 'justify'; if (tl) updateTextLayer(tl, { align: 'justify' }); emit(); }}>≡</button>
       </div>
       <Check label="Glätten" value={S.text.aa} onChange={(x) => { S.text.aa = x; emit(); }} />
+      {tl && <div className="row" style={{ flexWrap: 'wrap' }}>
+        <button className="btn small" onClick={() => import('../textTools.js').then((m) => m.toggleBox())}>{tl.text.box ? 'In Punkttext' : 'In Absatztext'}</button>
+        {tl.text.box && <button className="btn small" onClick={() => import('../textTools.js').then((m) => m.resizeBox())}>Rahmengröße…</button>}
+        <button className="btn small" onClick={() => import('../textTools.js').then((m) => m.warpText())}>Verkrümmen…</button>
+      </div>}
+      <TextStylesBlock kind="para" />
     </div>
   );
 }

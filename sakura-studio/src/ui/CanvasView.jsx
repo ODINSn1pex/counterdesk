@@ -239,6 +239,13 @@ export function CanvasView() {
       if (op.kind === 'lasso' || op.kind === 'poly') {
         dashed(x, lw, t, () => { x.beginPath(); op.pts.forEach((q, i) => (i ? x.lineTo(q.x, q.y) : x.moveTo(q.x, q.y))); if (op.kind === 'poly' && op.hover) x.lineTo(op.hover.x, op.hover.y); });
       }
+      if (op.kind === 'patchDrag' && dd.selection) {
+        x.save(); x.globalAlpha = 0.45; x.drawImage(dd.selection, op.b.x - op.a.x, op.b.y - op.a.y); x.restore();
+      }
+      if (op.kind === 'rectTool' || op.kind === 'typeBox') {
+        const r = TL.norm({ x: op.a.x, y: op.a.y, w: op.b.x - op.a.x, h: op.b.y - op.a.y });
+        x.save(); x.strokeStyle = op.sub === 'frame' ? '#9aa0b4' : col.accent; x.lineWidth = 1.5 * lw; x.setLineDash(op.kind === 'typeBox' ? [4 * lw, 3 * lw] : []); x.strokeRect(r.x, r.y, r.w, r.h); x.restore();
+      }
       if (op.kind === 'gradient') {
         x.strokeStyle = '#fff'; x.lineWidth = 2 * lw; x.beginPath(); x.moveTo(op.a.x, op.a.y); x.lineTo(op.b.x, op.b.y); x.stroke();
         x.strokeStyle = '#000'; x.lineWidth = lw; x.stroke();
@@ -259,6 +266,34 @@ export function CanvasView() {
       });
       x.restore();
     });
+    // Farbaufnahmepunkte, Zählungen, Anmerkungen, Slices, Symmetrieachsen
+    const fsz = 11 * lw;
+    (dd.samplers || []).forEach((q, i) => {
+      x.save(); x.strokeStyle = '#000'; x.lineWidth = 3 * lw; x.beginPath(); x.arc(q.x, q.y, 5 * lw, 0, 7); x.moveTo(q.x - 9 * lw, q.y); x.lineTo(q.x + 9 * lw, q.y); x.moveTo(q.x, q.y - 9 * lw); x.lineTo(q.x, q.y + 9 * lw); x.stroke();
+      x.strokeStyle = '#fff'; x.lineWidth = 1.2 * lw; x.stroke(); x.font = `bold ${fsz}px sans-serif`; x.fillStyle = '#fff'; x.strokeStyle = '#000'; x.lineWidth = 3 * lw; x.strokeText(String(i + 1), q.x + 7 * lw, q.y + 16 * lw); x.fillText(String(i + 1), q.x + 7 * lw, q.y + 16 * lw); x.restore();
+    });
+    if ((dd.counts || []).length && (S.tool === 'eyedropper' || S.prefs.showCounts !== false)) {
+      x.save(); x.font = `bold ${fsz * 1.2}px sans-serif`; x.textAlign = 'center'; x.textBaseline = 'middle';
+      dd.counts.forEach((q, i) => { x.fillStyle = '#e11d48'; x.beginPath(); x.arc(q.x, q.y, 9 * lw, 0, 7); x.fill(); x.fillStyle = '#fff'; x.fillText(String(i + 1), q.x, q.y + 0.5 * lw); });
+      x.restore();
+    }
+    (dd.notes || []).forEach((q, i) => {
+      x.save(); x.fillStyle = S.ui.noteSel === i ? '#facc15' : '#fde68a'; x.strokeStyle = '#92400e'; x.lineWidth = lw;
+      x.beginPath(); x.rect(q.x, q.y, 14 * lw, 12 * lw); x.fill(); x.stroke(); x.beginPath(); x.moveTo(q.x + 3 * lw, q.y + 4 * lw); x.lineTo(q.x + 11 * lw, q.y + 4 * lw); x.moveTo(q.x + 3 * lw, q.y + 8 * lw); x.lineTo(q.x + 9 * lw, q.y + 8 * lw); x.stroke(); x.restore();
+    });
+    if ((dd.slices || []).length && (S.tool === 'crop' || S.ui.showSlices)) {
+      x.save(); x.font = `bold ${fsz}px sans-serif`;
+      dd.slices.forEach((q, i) => { x.strokeStyle = '#38bdf8'; x.lineWidth = 1.5 * lw; x.strokeRect(q.x, q.y, q.w, q.h); x.fillStyle = '#38bdf8'; x.fillRect(q.x, q.y, 22 * lw, 15 * lw); x.fillStyle = '#fff'; x.fillText(String(i + 1).padStart(2, '0'), q.x + 3 * lw, q.y + 11 * lw); });
+      x.restore();
+    }
+    if (S.tool === 'brush' && S.brush.symmetry && S.brush.symmetry !== 'none') {
+      const cx = S.symCenter ? S.symCenter.x : dd.w / 2, cy = S.symCenter ? S.symCenter.y : dd.h / 2, m = S.brush.symmetry;
+      x.save(); x.strokeStyle = 'rgba(56,189,248,0.8)'; x.lineWidth = lw; x.setLineDash([6 * lw, 4 * lw]); x.beginPath();
+      if (m === 'vertical' || m === 'both') { x.moveTo(cx, 0); x.lineTo(cx, dd.h); }
+      if (m === 'horizontal' || m === 'both') { x.moveTo(0, cy); x.lineTo(dd.w, cy); }
+      if (m === 'radial' || m === 'mandala') { const n = Math.max(2, S.brush.symSegments || 6), R = Math.hypot(dd.w, dd.h); for (let i = 0; i < n; i++) { const a = i * Math.PI * 2 / n - Math.PI / 2; x.moveTo(cx, cy); x.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R); } }
+      x.stroke(); x.restore();
+    }
     if (S.measure && S.tool === 'eyedropper' && S.sub.eyedropper === 'ruler') {
       const m = S.measure; x.strokeStyle = '#ffde59'; x.lineWidth = 1.5 * lw; x.beginPath(); x.moveTo(m.a.x, m.a.y); x.lineTo(m.b.x, m.b.y); x.stroke();
       for (const q of [m.a, m.b]) { x.beginPath(); x.moveTo(q.x - 6 * lw, q.y); x.lineTo(q.x + 6 * lw, q.y); x.moveTo(q.x, q.y - 6 * lw); x.lineTo(q.x, q.y + 6 * lw); x.stroke(); }

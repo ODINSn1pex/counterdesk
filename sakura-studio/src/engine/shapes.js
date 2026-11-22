@@ -33,7 +33,11 @@ export function shapePath(x, kind, r, o) {
   const { x: X, y: Y, w: W, h: H } = r;
   x.beginPath();
   if (kind === 'rect') x.rect(X, Y, W, H);
-  else if (kind === 'rounded') x.roundRect(X, Y, W, H, Math.min(o.radius, Math.abs(W) / 2, Math.abs(H) / 2));
+  else if (kind === 'rounded') {
+    const lim = Math.min(Math.abs(W) / 2, Math.abs(H) / 2);
+    const rr = o.radii ? o.radii.map((v) => Math.max(0, Math.min(v || 0, lim))) : Math.min(o.radius, lim);
+    x.roundRect(X, Y, W, H, rr);
+  }
   else if (kind === 'ellipse') x.ellipse(X + W / 2, Y + H / 2, Math.abs(W / 2), Math.abs(H / 2), 0, 0, Math.PI * 2);
   else if (kind === 'triangle') { x.moveTo(X + W / 2, Y); x.lineTo(X + W, Y + H); x.lineTo(X, Y + H); x.closePath(); }
   else if (kind === 'polygon') {
@@ -79,9 +83,35 @@ export function renderShapeLayer(layer, w, h) {
   x.setTransform(1, 0, 0, 1, 0, 0);
   x.clearRect(0, 0, w, h);
   if (s.rot) { const cx = s.x + s.w / 2, cy = s.y + s.h / 2; x.translate(cx, cy); x.rotate(s.rot); x.translate(-cx, -cy); }
+  const opt = (q) => ({ radius: q.radius || 0, radii: q.radii || null, sides: q.sides || 5, starInner: q.starInner || 0.45 });
   if (s.kind === 'line') drawLine(x, { x: s.x, y: s.y }, { x: s.x + s.w, y: s.y + s.h }, { lineWidth: s.lineWidth || 6, arrow: s.arrow }, s.fillColor);
-  else {
-    shapePath(x, s.kind, { x: s.x, y: s.y, w: s.w, h: s.h }, { radius: s.radius || 0, sides: s.sides || 5, starInner: s.starInner || 0.45 });
+  else if (s.parts && s.parts.length) {
+    // Zusammengesetzte Form (Pfadoperationen: vereinigen, subtrahieren, Schnittmenge, ausschließen)
+    const m = document.createElement('canvas'); m.width = w; m.height = h; const mx = m.getContext('2d');
+    mx.setTransform(x.getTransform());
+    mx.fillStyle = '#000'; shapePath(mx, s.kind, s, opt(s)); mx.fill();
+    for (const p of s.parts) {
+      mx.globalCompositeOperation = { add: 'source-over', subtract: 'destination-out', intersect: 'destination-in', exclude: 'xor' }[p.op] || 'source-over';
+      shapePath(mx, p.kind, p, opt(p)); mx.fill();
+    }
+    mx.globalCompositeOperation = 'source-in'; mx.setTransform(1, 0, 0, 1, 0, 0); mx.fillStyle = s.fillColor; mx.fillRect(0, 0, w, h);
+    x.save(); x.setTransform(1, 0, 0, 1, 0, 0);
+    if (s.fillOn !== false) x.drawImage(m, 0, 0);
+    if (s.strokeOn) {
+      // Kontur um die resultierende Form: Silhouette erweitern und Innenfläche ausstanzen
+      const sw = s.strokeWidth || 1, k = document.createElement('canvas'); k.width = w; k.height = h; const kx = k.getContext('2d');
+      const n = Math.max(12, Math.round(sw * 3)), r = sw / 2;
+      const e = document.createElement('canvas'); e.width = w; e.height = h; const ex = e.getContext('2d'); ex.drawImage(m, 0, 0);
+      ex.globalCompositeOperation = 'destination-in';
+      kx.drawImage(m, 0, 0);
+      for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, dx = Math.cos(a) * r, dy = Math.sin(a) * r; kx.drawImage(m, dx, dy); ex.drawImage(m, dx, dy); }
+      kx.globalCompositeOperation = 'destination-out'; kx.drawImage(e, 0, 0);
+      kx.globalCompositeOperation = 'source-in'; kx.fillStyle = s.strokeColor; kx.fillRect(0, 0, w, h);
+      x.drawImage(k, 0, 0);
+    }
+    x.restore();
+  } else {
+    shapePath(x, s.kind, { x: s.x, y: s.y, w: s.w, h: s.h }, opt(s));
     if (s.fillOn !== false) { x.fillStyle = s.fillColor; x.fill(); }
     if (s.strokeOn) { x.strokeStyle = s.strokeColor; x.lineWidth = s.strokeWidth || 1; x.lineJoin = 'round'; x.stroke(); }
   }

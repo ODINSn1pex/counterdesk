@@ -1,3 +1,4 @@
+import { effectsToFx, fxToEffects } from './presets.js';
 // PSD-Import/-Export über ag-psd: Ebenen, Gruppen, Masken, Text, Einstellungsebenen
 import { readPsd as agRead, writePsd as agWrite } from 'ag-psd';
 import { Doc, Layer, flattenToCanvas, normalizeTree, childrenOf } from '../engine/doc.js';
@@ -8,11 +9,10 @@ const toAg = {
   normal: 'normal', dissolve: 'dissolve', darken: 'darken', multiply: 'multiply', 'color-burn': 'color burn', 'darker-color': 'darker color',
   lighten: 'lighten', screen: 'screen', 'color-dodge': 'color dodge', lighter: 'linear dodge', overlay: 'overlay', 'soft-light': 'soft light',
   'hard-light': 'hard light', difference: 'difference', exclusion: 'exclusion', hue: 'hue', saturation: 'saturation', color: 'color', luminosity: 'luminosity',
-  pass: 'pass through',
+  pass: 'pass through', 'linear-burn': 'linear burn', 'lighter-color': 'lighter color', 'vivid-light': 'vivid light', 'linear-light': 'linear light',
+  'pin-light': 'pin light', 'hard-mix': 'hard mix', subtract: 'subtract', divide: 'divide',
 };
 const fromAg = Object.fromEntries(Object.entries(toAg).map(([a, b]) => [b, a]));
-fromAg['linear burn'] = 'multiply'; fromAg['lighter color'] = 'lighten'; fromAg['vivid light'] = 'hard-light'; fromAg['linear light'] = 'hard-light';
-fromAg['pin light'] = 'hard-light'; fromAg['hard mix'] = 'hard-light'; fromAg['subtract'] = 'difference'; fromAg['divide'] = 'color-dodge';
 
 const rgbOf = (c) => (c && c.r != null ? rgbToHex(c.r, c.g, c.b) : '#000000');
 const colOf = (hex) => { const { r, g, b } = hexToRgb(hex); return { r, g, b }; };
@@ -105,6 +105,7 @@ export function readPsd(bytes, name) {
       l.opacity = n.opacity ?? 1;
       l.fill = n.fillOpacity ?? 1;
       l.blend = fromAg[n.blendMode] || 'normal';
+      if (n.effects && !n.effects.disabled) { try { l.fx = effectsToFx(n.effects); } catch { /* Stile ignorieren */ } }
       l.clip = !!n.clipping;
       l.mask = maskFromPsd(n.mask, W, H);
       if (n.children) {
@@ -158,6 +159,7 @@ export function writePsd(d) {
   const W = d.w, H = d.h;
   const node = (l) => {
     const o = { name: l.name, opacity: l.opacity, hidden: !l.visible, blendMode: toAg[l.blend] || 'normal', clipping: !!l.clip };
+    const eff = l.fx && fxToEffects(l.fx); if (eff) o.effects = eff;
     if (l.mask) o.mask = maskToPsd(l.mask, W, H);
     if (l.type === 'group') {
       o.opened = !l.collapsed;
