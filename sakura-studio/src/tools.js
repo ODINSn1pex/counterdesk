@@ -257,6 +257,7 @@ function stampDab(st, x, y, pressure = 1) {
     if (st.tgt.kind === 'pixels') color = kind === 'mixer' ? mixerColor(st, x, y) : dynColor(o, st.color);
     if (o.angleJitter) angle += (Math.random() - 0.5) * 360 * o.angleJitter;
     if (o.angleFollow && st.dir != null) angle += st.dir * 180 / Math.PI;
+    if (o.penAngle && st.penTwist != null) angle += st.penTwist;
     if (o.flowJitter) flow *= 1 - Math.random() * o.flowJitter;
     if (o.opacityJitter) flow *= 1 - Math.random() * o.opacityJitter;
     if (st.dualStroke) {
@@ -306,6 +307,7 @@ function healPatch(st, tx, ox, oy, s) {
 
 function strokeTo(st, p, pressure) {
   const o = st.o;
+  st.lastPressure = pressure;
   const spacing = Math.max(0.5, o.size * (o.spacing || 0.12));
   if (!st.last) { stampSym(st, p.x, p.y, pressure); st.last = { ...p }; refreshStroke(st); return; }
   const dx = p.x - st.last.x, dy = p.y - st.last.y, len = Math.hypot(dx, dy);
@@ -616,6 +618,7 @@ export function pointerDown(e) {
   switch (tool) {
     case 'view':
       if (sub === 'zoom' && !SPACE.held) { VIEW.zoomBy(e.alt ? 1 / 1.5 : 1.5, e.cx, e.cy); return; }
+      if (sub === 'rotate' && !SPACE.held) { T = { kind: 'rotview', a0: Math.atan2(e.rsy - e.vh / 2, e.rsx - e.vw / 2), r0: d.viewRot || 0 }; return; }
       T = { kind: 'pan', sx: e.sx, sy: e.sy, px: d.panX, py: d.panY };
       return;
     case 'move':
@@ -703,6 +706,8 @@ export function pointerDown(e) {
       const kind = sub === 'pencil' ? 'pencil' : sub === 'replace' ? 'replace' : sub === 'mixer' ? 'mixer' : 'brush';
       const st = beginStroke(d, e, kind); if (!st) return;
       T = { kind: 'stroke', st };
+      // Airbrush: Farbe baut sich auf, solange die Maus gedrückt bleibt
+      if (S.brush.airbrush && kind === 'brush') st.air = setInterval(() => { if (!T || T.st !== st || !st.last) { clearInterval(st.air); return; } stampSym(st, st.last.x, st.last.y, st.lastPressure || 1); refreshStroke(st); }, 70);
       if (e.shift && S.lastPaintPoint) { st.last = { ...S.lastPaintPoint }; }
       strokeTo(st, p, e.pressure);
       return;
@@ -768,6 +773,11 @@ export function pointerMove(e) {
   if (!T) return;
   switch (T.kind) {
     case 'pan': d.panX = T.px + (e.sx - T.sx); d.panY = T.py + (e.sy - T.sy); view.request(); break;
+    case 'rotview': {
+      let r = T.r0 + (Math.atan2(e.rsy - e.vh / 2, e.rsx - e.vw / 2) - T.a0) * 180 / Math.PI;
+      if (e.shift) r = Math.round(r / 15) * 15;
+      d.viewRot = ((Math.round(r) % 360) + 540) % 360 - 180; emit(); break;
+    }
     case 'move': moveDrag(d, e); break;
     case 'move-multi': {
       let dx = Math.round(e.p.x - T.a.x), dy = Math.round(e.p.y - T.a.y);
@@ -797,6 +807,7 @@ export function pointerMove(e) {
       if (e.shift && st.p0) { q = Math.abs(p.x - st.p0.x) > Math.abs(p.y - st.p0.y) ? { x: p.x, y: st.p0.y } : { x: st.p0.x, y: p.y }; }
       const sm = S.brush.smoothing || 0;
       if (sm > 0 && st.kind !== 'pencil') { st.smooth.x += (q.x - st.smooth.x) * (1 - sm * 0.85); st.smooth.y += (q.y - st.smooth.y) * (1 - sm * 0.85); q = { ...st.smooth }; }
+      if (e.twist != null) st.penTwist = e.twist;
       strokeTo(st, q, e.pressure);
       break;
     }
@@ -828,7 +839,7 @@ export function pointerMove(e) {
       break;
     }
     case 'shape': T.b = p; T.e = e; view.overlay(); break;
-    case 'pen': penDrag(d, e); break;
+    case 'pen': case 'pen-curv': penDrag(d, e); break;
     case 'pathsel': pathSelectDrag(d, e); break;
     case 'text-move': {
       const l = T.layer; l.text.x = T.tx + (p.x - T.a.x); l.text.y = T.ty + (p.y - T.a.y); renderTextLayer(l, d.w, d.h); view.request(); emit(); break;
@@ -844,7 +855,7 @@ export function pointerUp(e) {
   if (t.kind === 'poly') return;
   T = null;
   switch (t.kind) {
-    case 'pan': emit(); break;
+    case 'pan': case 'rotview': emit(); break;
     case 'move': moveUp(d, t); break;
     case 'move-multi': {
       if (!t.dx && !t.dy) break;
@@ -911,6 +922,7 @@ export function pointerUp(e) {
     }
     case 'eyedrop': setFg(S.fg); break;
     case 'stroke': {
+      if (t.st.air) { clearInterval(t.st.air); t.st.air = null; }
       S.lastPaintPoint = { ...p };
       const names = { brush: 'Pinsel', pencil: 'Buntstift', eraser: 'Radiergummi', clone: 'Kopierstempel', pattern: 'Musterstempel', history: 'Protokollpinsel', heal: 'Reparatur-Pinsel', replace: 'Farbe ersetzen' };
       if (S.ui.quickMask) { d.selRev++; view.request(); emit(); break; }
@@ -923,6 +935,7 @@ export function pointerUp(e) {
     case 'gradient': if (dist(t.a, t.b) > 1) commit('Verlauf'); break;
     case 'shape': finishShape(d, t, e); break;
     case 'pen': emit(); break;
+    case 'pen-curv': commit('Ankerpunkt'); emit(); break;
     case 'pathsel': commit('Pfad bearbeiten'); break;
     case 'text-move': commit('Text verschieben'); break;
     default:
@@ -1319,7 +1332,14 @@ function penDown(d, e) {
     d.paths.push(path); d.activePath = d.paths.length - 1;
   }
   if (path.points.length > 2 && dist(path.points[0], p) < tol) {
-    path.closed = true; commit('Pfad schließen'); return;
+    path.closed = true; if (path.curvature) smoothPath(path); commit('Pfad schließen'); view.overlay(); return;
+  }
+  if (S.sub.pen === 'curvature') {
+    // Rundungszeichenstift: Klick = Punkt, Kurven ergeben sich automatisch; Alt+Klick = Eckpunkt
+    path.curvature = true;
+    path.points.push({ x: p.x, y: p.y, corner: !!e.alt });
+    smoothPath(path); T = { kind: 'pen-curv', path, pt: path.points[path.points.length - 1] };
+    view.overlay(); emit(); return;
   }
   const pt = { x: p.x, y: p.y };
   path.points.push(pt);
@@ -1327,8 +1347,21 @@ function penDown(d, e) {
   view.overlay(); emit();
 }
 
+// Glatte Bézier-Griffe (Catmull-Rom) für alle Punkte eines Rundungspfads
+export function smoothPath(path) {
+  const pts = path.points, n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const pt = pts[i];
+    const prev = pts[i - 1] || (path.closed ? pts[n - 1] : null), next = pts[i + 1] || (path.closed ? pts[0] : null);
+    if (pt.corner || !prev || !next) { delete pt.ix; delete pt.iy; delete pt.ox; delete pt.oy; if (!pt.corner && (prev || next)) { const o = prev || next; const k = 1 / 3; if (!prev && next) { pt.ox = pt.x + (next.x - pt.x) * k; pt.oy = pt.y + (next.y - pt.y) * k; pt.ix = pt.x; pt.iy = pt.y; } else if (prev) { pt.ix = pt.x + (prev.x - pt.x) * k; pt.iy = pt.y + (prev.y - pt.y) * k; pt.ox = pt.x; pt.oy = pt.y; } void o; } continue; }
+    const tx = (next.x - prev.x) / 6, ty = (next.y - prev.y) / 6;
+    pt.ix = pt.x - tx; pt.iy = pt.y - ty; pt.ox = pt.x + tx; pt.oy = pt.y + ty;
+  }
+}
+
 function penDrag(d, e) {
   const p = e.p;
+  if (T.kind === 'pen-curv') { T.pt.x = p.x; T.pt.y = p.y; smoothPath(T.path); view.overlay(); return; }
   if (T.free) {
     const pts = T.path.points; const last = pts[pts.length - 1];
     if (dist(last, p) > 4 / e.zoom) pts.push({ x: p.x, y: p.y });

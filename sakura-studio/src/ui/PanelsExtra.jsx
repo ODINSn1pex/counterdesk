@@ -78,3 +78,42 @@ export function NotesPanel() {
     </div>
   );
 }
+
+// Glyphen: Sonderzeichen in den aktiven Text einfügen
+const GLYPHS = {
+  'Satzzeichen': '„“‚‘«»‹›–—…·•°§¶†‡※¡¿‰′″',
+  'Währung': '€$£¥¢₩₹₽₺₿¤',
+  'Mathematik': '±×÷≈≠≤≥∞√∑∏∫∂∆πµ‰¼½¾¹²³⁰⁴⁵⁶⁷⁸⁹₀₁₂₃',
+  'Pfeile': '←↑→↓↔↕↖↗↘↙⇐⇒⇔➜➤⟶',
+  'Symbole': '©®™℗№℃℉★☆♥♡♦♣♠♪♫☀☁☂☃✓✔✗✘✿❀❤☯☮⚡',
+  'Japanisch': '「」『』〜・ー。、桜花月夢愛光',
+  'Griechisch': 'αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΘΛΞΠΣΦΨΩ',
+  'Akzente': 'ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕÖØÙÚÛÜÝßàáâãäåæçèéêëìíîïñòóôõöøùúûüýÿœŒšŠžŽ',
+};
+export function GlyphsPanel() {
+  useStore();
+  const d = doc();
+  const tl = d && (S.ui.textEdit ? d.layers.find((l) => l.id === S.ui.textEdit.layerId) : (d.layer.type === 'text' ? d.layer : null));
+  const insert = async (ch) => {
+    if (!tl) return;
+    const { updateTextLayer } = await import('../tools.js');
+    const ta = document.querySelector('.text-editor');
+    const txt = tl.text.content || '';
+    let pos = txt.length;
+    if (ta && S.ui.textEdit) pos = ta.selectionStart ?? pos;
+    updateTextLayer(tl, { content: txt.slice(0, pos) + ch + txt.slice(ta && S.ui.textEdit ? (ta.selectionEnd ?? pos) : pos) });
+    if (ta && S.ui.textEdit) setTimeout(() => { ta.focus(); ta.setSelectionRange(pos + ch.length, pos + ch.length); }, 0);
+    if (!S.ui.textEdit) commit('Glyphe einfügen');
+  };
+  return (
+    <div className="glyphs" style={{ fontFamily: tl ? `"${tl.text.font}"` : undefined }}>
+      {!tl && <div className="hint">Wähle eine Textebene oder bearbeite Text, um Zeichen einzufügen.</div>}
+      {Object.entries(GLYPHS).map(([cat, chars]) => (
+        <div key={cat}>
+          <div className="hint">{cat}</div>
+          <div className="glyph-grid">{[...chars].map((ch) => <button key={ch} title={'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')} disabled={!tl} onMouseDown={(e) => e.preventDefault()} onClick={() => insert(ch)}>{ch}</button>)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}

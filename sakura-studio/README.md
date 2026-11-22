@@ -8,7 +8,11 @@ npm install
 sh scripts/fetch-models.sh        # KI-Modelle (nicht im Repository)
 npm run build                     # Web-Bundle nach dist/
 npx electron-builder --win dir    # Programmordner release/win-unpacked
-cd installer && makensis lumora.nsi   # Installer -> release/Lumora-Setup-4.0.0.exe
+cd installer && makensis lumora.nsi   # Installer -> release/Lumora-Setup-5.0.0.exe
+# Kompakt-Installer ohne KI-Modelle (werden beim ersten Gebrauch geladen):
+#   public/models vorübergehend entfernen, npm run build,
+#   npx electron-builder --win dir --config.directories.output=release/lite
+#   makensis "-DSRC=lite\\win-unpacked" -DSUFFIX=-Kompakt lumora.nsi
 ```
 Der Installer legt standardmäßig `Desktop\Lumora` an (Programm + Unterordner `Projekte`),
 erstellt Desktop- und Startmenü-Verknüpfungen und verknüpft `.lumora`-Projektdateien.
@@ -24,3 +28,7 @@ erstellt Desktop- und Startmenü-Verknüpfungen und verknüpft `.lumora`-Projekt
   Hochskalieren, Ebenen ausrichten/überblenden, Photomerge, HDR, Export als SVG/PDF/mehrere Größen/Slices
 - `src/engine/heavy.js` – rechenintensive Operationen im Worker (Seam Carving, Hochskalieren)
 - `src/textTools.js` – Text verkrümmen, Absatz-/Zeichenformate, Suchen & Ersetzen
+
+## Updates
+Unter Voreinstellungen › Allgemein lässt sich eine Update-Adresse eintragen. Dort muss eine JSON-Datei liegen:
+`{ "version": "5.0.1", "url": "https://…/Lumora-Setup-5.0.1.exe", "notes": "Was ist neu" }`

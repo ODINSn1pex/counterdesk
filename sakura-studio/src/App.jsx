@@ -14,7 +14,7 @@ import { Timeline } from './ui/Timeline.jsx';
 class ErrorBoundary extends Component {
   constructor(p) { super(p); this.state = { err: null }; }
   static getDerivedStateFromError(err) { return { err }; }
-  componentDidCatch(err, info) { console.error('Darstellungsfehler', err, info); autosaveAll(); }
+  componentDidCatch(err, info) { console.error('Darstellungsfehler', err, info); window.native && window.native.logError && window.native.logError('Darstellung: ' + (err && err.stack) + (info && info.componentStack || '')); autosaveAll(); }
   render() {
     if (!this.state.err) return this.props.children;
     return (
@@ -72,6 +72,7 @@ function Shell() {
 export default function App() {
   useEffect(() => {
     applyTheme();
+    setTimeout(() => import('./state.js').then((m) => { if (m.S.prefs.autoUpdate !== false) m.checkUpdates(true); }), 8000);
     import('./tools.js').then((m) => m.loadCustomTips());
     import('./state.js').then((m) => m.loadSavedPatterns());
     import('./plugins.js').then((m) => m.loadPlugins());

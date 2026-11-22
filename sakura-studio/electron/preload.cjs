@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('native', {
   genfill: (o) => ipcRenderer.invoke('genfill', o),
   pluginsList: () => ipcRenderer.invoke('plugins-list'),
   pluginsOpen: () => ipcRenderer.invoke('plugins-open'),
+  logError: (m) => ipcRenderer.invoke('log-error', m),
+  openErrorLog: () => ipcRenderer.invoke('open-error-log'),
   listDir: (dir) => ipcRenderer.invoke('list-dir', dir),
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch (e) { return null; } },
   on: (ch, fn) => {

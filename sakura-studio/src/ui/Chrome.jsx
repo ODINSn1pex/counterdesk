@@ -93,11 +93,11 @@ export const TOOLS = [
   { id: 'gradient', name: 'Verlaufswerkzeug', key: 'G', subs: [['gradient', 'Verlaufswerkzeug', 'gradient'], ['bucket', 'Füllwerkzeug', 'bucket']] },
   { id: 'blur', name: 'Weichzeichner', key: 'R', subs: [['blur', 'Weichzeichner-Werkzeug', 'blur'], ['sharpen', 'Scharfzeichner-Werkzeug', 'sharpen'], ['smudge', 'Wischfinger-Werkzeug', 'smudge']] },
   { id: 'dodge', name: 'Abwedler', key: 'O', subs: [['dodge', 'Abwedler-Werkzeug', 'dodge'], ['burn', 'Nachbelichter-Werkzeug', 'burn'], ['sponge', 'Schwamm-Werkzeug', 'sponge']] },
-  { id: 'pen', name: 'Zeichenstift', key: 'P', subs: [['pen', 'Zeichenstift-Werkzeug', 'pen'], ['freeform', 'Freiform-Zeichenstift', 'freeform']] },
+  { id: 'pen', name: 'Zeichenstift', key: 'P', subs: [['pen', 'Zeichenstift-Werkzeug', 'pen'], ['freeform', 'Freiform-Zeichenstift', 'freeform'], ['curvature', 'Rundungszeichenstift', 'pen']] },
   { id: 'type', name: 'Horizontales Textwerkzeug', key: 'T', subs: [['h', 'Horizontales Textwerkzeug', 'type'], ['v', 'Vertikales Textwerkzeug', 'typeV']] },
   { id: 'select', name: 'Direktauswahl', key: 'A', subs: [['direct', 'Direktauswahl-Werkzeug (Pfade)', 'select']] },
   { id: 'shape', name: 'Formwerkzeug', key: 'U', subs: [['rect', 'Rechteck-Werkzeug', 'rect'], ['rounded', 'Abgerundetes Rechteck', 'rounded'], ['ellipse', 'Ellipse-Werkzeug', 'ellipse'], ['triangle', 'Dreieck-Werkzeug', 'triangle'], ['polygon', 'Polygon-Werkzeug', 'polygon'], ['line', 'Linienzeichner', 'line'], ['star', 'Stern', 'star'], ['heart', 'Herz', 'heart'], ['blossom', 'Kirschblüte', 'blossom'], ['arrow', 'Pfeil', 'arrow'], ['speech', 'Sprechblase', 'speech']] },
-  { id: 'view', name: 'Hand', key: 'H', subs: [['hand', 'Hand-Werkzeug (H)', 'hand'], ['zoom', 'Zoom-Werkzeug (Z)', 'zoom']] },
+  { id: 'view', name: 'Hand', key: 'H', subs: [['hand', 'Hand-Werkzeug (H)', 'hand'], ['rotate', 'Ansicht-drehen-Werkzeug', 'rotate'], ['zoom', 'Zoom-Werkzeug (Z)', 'zoom']] },
 ];
 
 export function Toolbar() {

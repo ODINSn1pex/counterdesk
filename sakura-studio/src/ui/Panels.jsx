@@ -1,4 +1,4 @@
-import { StylesPanel, CompsPanel, NotesPanel } from './PanelsExtra.jsx';
+import { StylesPanel, CompsPanel, NotesPanel, GlyphsPanel } from './PanelsExtra.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { S, emit, useStore, useCursor, doc, view, commit, setFg, setBg, L, SELECT, openDialog, saveSwatches, setLayerProp, commitLater, PATTERNS, patternCanvas, toast, IMAGE, EDIT, ADJ_LAYER_TYPES, renderShapeLayer, startTransform } from '../state.js';
 import { ADJUSTMENTS, FILTERS } from '../engine/filters.js';
@@ -562,7 +562,7 @@ function PathsPanel() {
 // ---------------- Seitenleiste (Protokoll, Navigator, Info …) ----------------
 export function SideStrip() {
   useStore();
-  const items = [['history', 'history', 'Protokoll'], ['actions', 'play', 'Aktionen'], ['navigator', 'navigator', 'Navigator'], ['info', 'info', 'Info'], ['brushes', 'brushes', 'Pinsel'], ['character', 'character', 'Zeichen'], ['paragraph', 'paragraph', 'Absatz']];
+  const items = [['history', 'history', 'Protokoll'], ['actions', 'play', 'Aktionen'], ['navigator', 'navigator', 'Navigator'], ['info', 'info', 'Info'], ['brushes', 'brushes', 'Pinsel'], ['character', 'character', 'Zeichen'], ['paragraph', 'paragraph', 'Absatz'], ['glyphs', 'sparkle', 'Glyphen']];
   return (
     <div className="side-strip" data-tut="side">
       <div className="tb-grip" />
@@ -577,7 +577,7 @@ export function Flyout() {
   useStore();
   const f = S.ui.flyout;
   if (!f) return null;
-  const title = { history: 'Protokoll', actions: 'Aktionen', navigator: 'Navigator', info: 'Info', brushes: 'Pinsel', character: 'Zeichen', paragraph: 'Absatz' }[f];
+  const title = { history: 'Protokoll', actions: 'Aktionen', navigator: 'Navigator', info: 'Info', brushes: 'Pinsel', character: 'Zeichen', paragraph: 'Absatz', glyphs: 'Glyphen' }[f];
   return (
     <div className="flyout">
       <div className="panel-tabs"><button className="on">{title}</button><div className="flex" /><button className="panel-menu" onClick={() => { S.ui.flyout = null; emit(); }}><Icon name="close" size={13} /></button></div>
@@ -586,6 +586,7 @@ export function Flyout() {
         {f === 'actions' && <ActionsPanel />}
         {f === 'navigator' && <NavigatorPanel />}
         {f === 'info' && <InfoPanel />}
+        {f === 'glyphs' && <GlyphsPanel />}
         {f === 'brushes' && <BrushesPanel />}
         {f === 'character' && <CharacterPanel />}
         {f === 'paragraph' && <ParagraphPanel />}
@@ -754,6 +755,11 @@ function CharacterPanel() {
           <button key={k} title={t} className={v(k) ? 'on' : ''} style={{ fontWeight: k === 'bold' ? 700 : 400, fontStyle: k === 'italic' ? 'italic' : 'normal', textDecoration: k === 'underline' ? 'underline' : k === 'strike' ? 'line-through' : 'none' }} onClick={() => upd(k)(!v(k))}>{n}</button>
         ))}
       </div>
+      <div className="hint">OpenType</div>
+      <Check label="Kerning (Unterschneidung)" value={v('kerning') !== false} onChange={upd('kerning')} />
+      <Check label="Kapitälchen" value={!!v('smallCaps')} onChange={upd('smallCaps')} />
+      <label className="prow"><span>Schriftbreite</span><Sel value={v('stretch') || 'normal'} onChange={upd('stretch')} options={[['condensed', 'Schmal'], ['semi-condensed', 'Halbschmal'], ['normal', 'Normal'], ['semi-expanded', 'Halbbreit'], ['expanded', 'Breit']]} width={120} /></label>
+      <button className="btn small" onClick={() => { S.ui.flyout = 'glyphs'; emit(); }}>Glyphen…</button>
       {!tl && <div className="hint">Einstellungen gelten für den nächsten Text (T).</div>}
       <TextStylesBlock kind="char" />
     </div>
@@ -793,6 +799,7 @@ function ParagraphPanel() {
         <button title="Blocksatz" className={v === 'justify' ? 'on' : ''} onClick={() => { S.text.align = 'justify'; if (tl) updateTextLayer(tl, { align: 'justify' }); emit(); }}>≡</button>
       </div>
       <Check label="Glätten" value={S.text.aa} onChange={(x) => { S.text.aa = x; emit(); }} />
+      {tl && <Check label="Silbentrennung (Absatztext)" value={!!tl.text.hyphenate} onChange={(x) => updateTextLayer(tl, { hyphenate: x })} />}
       {tl && <div className="row" style={{ flexWrap: 'wrap' }}>
         <button className="btn small" onClick={() => import('../textTools.js').then((m) => m.toggleBox())}>{tl.text.box ? 'In Punkttext' : 'In Absatztext'}</button>
         {tl.text.box && <button className="btn small" onClick={() => import('../textTools.js').then((m) => m.resizeBox())}>Rahmengröße…</button>}

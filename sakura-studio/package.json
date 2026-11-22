@@ -1,7 +1,7 @@
 {
   "name": "lumora",
   "productName": "Lumora",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "description": "Lumora – Bildbearbeitung",
   "author": "Lumora",
   "main": "electron/main.cjs",
@@ -64,6 +64,7 @@
     "gifenc": "^1.0.3",
     "libraw-wasm": "^1.6.0",
     "onnxruntime-web": "^1.19.2",
+    "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "resedit": "^2.0.3",

@@ -134,6 +134,7 @@ export class Doc {
     this.artboards = []; // Zeichenflächen: { name, x, y, w, h, bg }
     this.frames = [];    // Animation: { vis: {layerId: bool}, delay }
     this.globalLight = { angle: 120, altitude: 30 }; // Globaler Lichteinfall
+    this.profile = 'sRGB'; // Farbprofil (ICC beim Export)
     this.comps = [];     // Ebenenkompositionen
     this.samplers = [];  // Farbaufnahmepunkte
     this.counts = [];    // Zählungen
@@ -210,7 +211,7 @@ export class Doc {
       paths: JSON.parse(JSON.stringify(this.paths)),
       artboards: JSON.parse(JSON.stringify(this.artboards || [])),
       frames: JSON.parse(JSON.stringify(this.frames || [])),
-      extra: JSON.stringify({ globalLight: this.globalLight, comps: this.comps, samplers: this.samplers, counts: this.counts, notes: this.notes, slices: this.slices }),
+      extra: JSON.stringify({ profile: this.profile, globalLight: this.globalLight, comps: this.comps, samplers: this.samplers, counts: this.counts, notes: this.notes, slices: this.slices }),
       alphaChannels: this.alphaChannels.map((a) => ({ name: a.name, canvas: a.canvas })),
     };
   }
@@ -325,7 +326,18 @@ export function layoutText(x, t) {
     let line = '';
     for (const wd of words) {
       const test = line + wd;
-      if (line && x.measureText(test.trimEnd()).width > maxW && wd.trim()) { out.push({ s: line.trimEnd(), last: false }); line = wd.trimStart(); }
+      if (line && x.measureText(test.trimEnd()).width > maxW && wd.trim()) {
+        // Silbentrennung (einfach): Wortteil mit Bindestrich in die aktuelle Zeile nehmen
+        let done = false;
+        if (t.hyphenate && wd.trim().length >= 7) {
+          const word = wd.trim();
+          for (let k = word.length - 3; k >= 3; k--) {
+            if (!/[a-zäöüß]/i.test(word[k - 1]) || !/[a-zäöüß]/i.test(word[k])) continue;
+            if (x.measureText(line + word.slice(0, k) + '-').width <= maxW) { out.push({ s: line + word.slice(0, k) + '-', last: false }); line = word.slice(k); done = true; break; }
+          }
+        }
+        if (!done) { out.push({ s: line.trimEnd(), last: false }); line = wd.trimStart(); }
+      }
       else line = test;
       // einzelnes Wort länger als der Rahmen: hart umbrechen
       while (x.measureText(line).width > maxW && line.length > 1) {
@@ -351,6 +363,7 @@ export function renderTextLayer(layer, w, h) {
   x.textBaseline = 'top';
   x.font = fontOf(t);
   try { x.letterSpacing = (t.tracking || 0) + 'px'; } catch (e) { /* alt */ }
+  try { x.fontKerning = t.kerning === false ? 'none' : 'normal'; x.fontVariantCaps = t.smallCaps ? 'small-caps' : 'normal'; x.fontStretch = t.stretch || 'normal'; } catch (e) { /* alt */ }
   const lh = t.size * (t.leading || 1.2);
   const lines = layoutText(x, t);
   const align = t.align || 'left';

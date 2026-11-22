@@ -24,6 +24,10 @@ export function TextEditor({ geom }) {
     lineHeight: (t.leading || 1.2), textAlign: t.align, textTransform: t.caps ? 'uppercase' : undefined, whiteSpace: t.box ? 'pre-wrap' : 'pre', letterSpacing: (t.tracking || 0) * g.z + 'px',
     writingMode: t.vertical ? 'vertical-rl' : undefined,
   };
+  if (d.viewRot) {
+    const wrap = document.querySelector('.canvas-wrap');
+    if (wrap) { style.transform = `rotate(${d.viewRot}deg)`; style.transformOrigin = `${wrap.clientWidth / 2 - left}px ${wrap.clientHeight / 2 - style.top}px`; }
+  }
   return (
     <textarea
       ref={ref}

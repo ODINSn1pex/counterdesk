@@ -4,12 +4,18 @@ SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 
 !define APP "Lumora"
-!define VER "4.0.0"
+!define VER "5.0.0"
 !define EXE "Lumora.exe"
 !define UNKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Lumora"
 
 Name "${APP}"
-OutFile "..\release\Lumora-Setup-${VER}.exe"
+!ifndef SRC
+  !define SRC "win-unpacked"
+!endif
+!ifndef SUFFIX
+  !define SUFFIX ""
+!endif
+OutFile "..\release\Lumora-Setup-${VER}${SUFFIX}.exe"
 InstallDir "$DESKTOP\${APP}"
 InstallDirRegKey HKCU "Software\Lumora" "InstallDir"
 RequestExecutionLevel user
@@ -40,7 +46,7 @@ VIAddVersionKey /LANG=1031 "LegalCopyright" "© 2026 ${APP}"
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File /r "..\release\win-unpacked\*.*"
+  File /r "..\release\${SRC}\*.*"
   CreateDirectory "$INSTDIR\Projekte"
   WriteUninstaller "$INSTDIR\Deinstallieren.exe"
   CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\${EXE}" 0

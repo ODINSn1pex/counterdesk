@@ -539,6 +539,8 @@ function PrefsDialog({ dg }) {
         <div className="prefs-nav">{PREF_CATS.map(([k, n]) => <button key={k} className={cat === k ? 'on' : ''} onClick={() => setCat(k)}>{n}</button>)}</div>
         <div className="prefs-body">
           {cat === 'general' && <>
+            <Row label="Updates"><Check label="Beim Start nach Updates suchen" value={p.autoUpdate !== false} onChange={set('autoUpdate')} /></Row>
+            <Row label="Update-Adresse"><input className="path-in" style={{ width: 300 }} placeholder="https://…/lumora-update.json" value={p.updateUrl || ''} onChange={(e) => set('updateUrl')(e.target.value)} /></Row>
             <h4>Allgemein</h4>
             <Row label="Startbildschirm"><Check label="Startbildschirm anzeigen, wenn kein Dokument offen ist" value={p.showWelcome} onChange={set('showWelcome')} /></Row>
             <Row label="Automatisch sichern" hint="Ungespeicherte Dokumente werden für die Wiederherstellung nach einem Absturz gesichert."><Sel value={String(p.autoSaveMin)} onChange={(v) => set('autoSaveMin')(Number(v))} options={[['0', 'Aus'], ['1', 'Jede Minute'], ['3', 'Alle 3 Minuten'], ['5', 'Alle 5 Minuten'], ['10', 'Alle 10 Minuten']]} width={200} /></Row>
@@ -575,6 +577,7 @@ function PrefsDialog({ dg }) {
             <Row label="Zoom"><Check label="Animiertes Zoomen" value={p.animatedZoom} onChange={set('animatedZoom')} /></Row>
             <Row label="Malwerkzeug-Cursor"><Sel value={p.brushCursor} onChange={set('brushCursor')} options={[['normal', 'Pinselspitze (Kreis)'], ['both', 'Pinselspitze + Fadenkreuz'], ['cross', 'Präzise (Fadenkreuz)']]} width={240} /></Row>
             <Row label="Grafiktablett"><Check label="Stiftdruck steuert Größe" value={p.pressureSize} onChange={set('pressureSize')} /><Check label="Stiftdruck steuert Deckkraft" value={p.pressureOpacity} onChange={set('pressureOpacity')} /></Row>
+            <Row label="Farbe"><Check label="ICC-Farbprofil beim Export einbetten" value={p.embedProfile !== false} onChange={set('embedProfile')} /></Row>
             <Row label="Text"><Check label="Rechtschreibprüfung beim Schreiben (Rechtsklick zeigt Vorschläge)" value={p.spellcheck !== false} onChange={set('spellcheck')} /></Row>
             <Row label="Markierungen"><Check label="Zählungen immer anzeigen" value={p.showCounts !== false} onChange={set('showCounts')} /></Row>
             <Row label="Transformieren" hint="Umschalttaste kehrt das Verhalten jeweils um."><Check label="Ecken proportional skalieren" value={p.proportionalTransform} onChange={set('proportionalTransform')} /></Row>
@@ -818,7 +821,7 @@ function AboutDialog() {
       <div className="about">
         <Logo size={64} />
         <h2>Lumora</h2>
-        <div>Version 4.0.0 · Bildbearbeitung für Windows</div>
+        <div>Version 5.0.0 · Bildbearbeitung für Windows</div>
         <p>Ebenen, Masken, Auswahlen, Pinsel, Retusche, Text, Formen, Pfade, über 50 Korrekturen & Filter, PSD-Import/-Export und mehr.</p>
         <p className="muted">Arbeitsordner: Desktop\Lumora\Projekte · Einstellungen: Bearbeiten › Voreinstellungen (Strg+K)</p>
         <details className="licenses"><summary>Open-Source-Komponenten</summary>
@@ -836,6 +839,7 @@ function FeaturesDialog() {
   const groups = [
     ['Datei', 'Neu (Vorlagen), Öffnen (PNG, JPG, WebP, GIF, BMP, SVG, PSD, .lumora), Zuletzt geöffnet, Speichern als Projekt, PSD mit Ebenen speichern, Export PNG/JPG/WebP mit Qualität & Skalierung, Ebenen als Dateien exportieren, Platzieren, Drag & Drop, Drucken'],
     ['Entfernen & Freistellen', 'Markierte Bereiche mit KI entfernen (LaMa-Modell, lokal), Entfernen-Werkzeug zum Übermalen, Hintergrund entfernen als Maske, Motiv/Auswahl in neue Ebene ausschneiden oder kopieren, schwebende Aktionsleiste'],
+    ['Neu in 5.0', 'Camera-Raw-Filter (auch als Einstellungsebene), Objektivkorrektur (Verzeichnung, Farbsäume, Vignette), Haut glätten, Rundungszeichenstift, Ansicht drehen, Glyphen-Bedienfeld, Kerning/Kapitälchen/Schriftbreite, Silbentrennung, PDF-Import, PSB-Export, Skripte ausführen, Airbrush und Stiftneigung, Farbprofile (sRGB, Display P3, Adobe RGB) zuweisen, umwandeln und als ICC einbetten, Update-Prüfung, lokales Fehlerprotokoll, KI-Modelle bei Bedarf laden (Kompakt-Installer)'],
     ['Neu in 4.0', 'Pinsel-Engine (F5) mit Struktur, Dualem Pinsel, Farb- und Transfer-Jitter, Symmetrie/Mandala und Misch-Pinsel; Ebenenstile Abgeflachte Kante und Relief, Glanz, Schein nach innen, Musterüberlagerung, mehrere Konturen/Schatten, globaler Lichteinfall; Fülloptionen „Farbbereich“; 9 zusätzliche exakte Füllmethoden (Linear nachbelichten, Strahlendes/Lineares Licht, Lichtpunkt, Hart mischen, Subtrahieren, Dividieren, Hellere/Dunklere Farbe); Ausbessern-Werkzeug, Inhaltsbasiert verschieben und skalieren, Generativ erweitern (lokale KI), Himmel austauschen, Hochskalieren; Absatztext mit Blocksatz, Text verkrümmen, Zeichen-/Absatzformate, Rechtschreibprüfung, Suchen & Ersetzen; Vektormasken, Formen kombinieren, Eckradien einzeln; Photomerge, HDR-Zusammenfügung, Ebenen automatisch ausrichten/überblenden (Fokus-Stacking); Import von .pat, .asl, .grd, .aco; Export als SVG, PDF, mehrere Größen und Slices; Farbaufnahme-, Zählungs-, Anmerkungs-, Slice- und Rahmenwerkzeug; Ebenenkompositionen; Stile-Bedienfeld; Tutorial mit 61 Schritten'],
     ['Neu in 3.0', 'Echte RAW-Entwicklung (LibRaw: Weißabgleich, Belichtung, Lichter, Rauschreduzierung, Demosaicing), Photoshop-Pinsel (.abr), Zeichenflächen, CMYK-TIFF-Export und TIFF-Import, Zeitleiste mit GIF-/MP4-/WebM-Export, generative Füllung (OpenAI, eigener Schlüssel), Plugin-Schnittstelle, Funktionslexikon (F1)'],
     ['Nicht-destruktiv', 'Einstellungsebenen (15 Korrekturen, jederzeit änderbar, mit Maske und Schnittmaske), Ebenengruppen (verschachtelt, Hindurchwirken, Gruppenmaske, Ein-/Ausklappen, Drag & Drop), Vektor-Formebenen (Farbe, Kontur, Radius, Seiten nachträglich änderbar), Smart-Objekte (verlustfreies Skalieren/Drehen/Verformen, Smartfilter ein-/ausschaltbar, Inhalt bearbeiten/ersetzen)'],

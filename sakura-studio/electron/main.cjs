@@ -269,6 +269,18 @@ ipcMain.handle('plugins-list', () => {
 });
 ipcMain.handle('plugins-open', () => shell.openPath(pluginsDir()));
 
+// Lokales Fehlerprotokoll (bleibt auf dem Rechner, wird nirgendwohin gesendet)
+const errLog = () => path.join(app.getPath('userData'), 'fehlerprotokoll.txt');
+ipcMain.handle('log-error', (_e, msg) => {
+  try {
+    const f = errLog();
+    if (fs.existsSync(f) && fs.statSync(f).size > 1024 * 1024) fs.renameSync(f, f + '.alt');
+    fs.appendFileSync(f, `[${new Date().toISOString()}] v${app.getVersion()} ${String(msg).slice(0, 4000)}\n`);
+  } catch (e) { /* ignorieren */ }
+});
+ipcMain.handle('open-error-log', () => { const f = errLog(); if (!fs.existsSync(f)) fs.writeFileSync(f, 'Keine Fehler aufgezeichnet.\n'); return shell.openPath(f); });
+process.on('uncaughtException', (e) => { try { fs.appendFileSync(errLog(), `[${new Date().toISOString()}] HAUPTPROZESS ${e && e.stack}\n`); } catch (er) { /* */ } });
+
 ipcMain.handle('list-dir', (_e, dir) => {
   try {
     return fs.readdirSync(dir).filter((f) => /\.(png|jpe?g|webp|gif|bmp|psd|lumora|sakura|tiff?)$/i.test(f)).map((f) => ({ name: f, path: path.join(dir, f) }));

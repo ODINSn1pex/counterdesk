@@ -6,7 +6,7 @@ import {
 } from './state.js';
 import { ADJUSTMENTS, FILTERS } from './engine/filters.js';
 import { PATHS, alignLayer, nudge, cancelOp, finishPoly, finishPath, textOnPath, definePresetFromSelection, makeTipFromCanvas } from './tools.js';
-import { ADJ_LAYER_TYPES, ARTBOARDS, importPresetFiles, defineStylePreset, askForm, VEC, COMPS } from './state.js';
+import { ADJ_LAYER_TYPES, ARTBOARDS, importPresetFiles, defineStylePreset, askForm, VEC, COMPS, COLOR } from './state.js';
 import { PLUGIN_COMMANDS, PLUGIN_FILTERS, PLUGIN_ERRORS, loadPlugins } from './plugins.js';
 
 const hasDoc = () => !!doc();
@@ -48,6 +48,7 @@ export const MENUS = [
       { label: 'Speichern', key: 'Strg+S', run: () => saveProject(false), enabled: hasDoc },
       { label: 'Speichern unter…', key: 'Umschalt+Strg+S', run: () => saveProject(true), enabled: hasDoc },
       { label: 'Als Photoshop-Datei (PSD) speichern…', run: () => exportPsd(), enabled: hasDoc },
+      { label: 'Als großes Dokumentformat (PSB) speichern…', run: () => exportPsd(null, true), enabled: hasDoc },
       '-',
       { label: 'Exportieren', sub: [
         { label: () => `Schnell-Export als ${({ png: 'PNG', jpeg: 'JPG', webp: 'WebP' })[S.prefs.exportFormat] || 'PNG'}`, key: 'Umschalt+Strg+Alt+W', run: () => exportImage(S.prefs.exportFormat || 'png', (S.prefs.jpgQuality || 90) / 100), enabled: hasDoc },
@@ -67,6 +68,8 @@ export const MENUS = [
         { label: 'Stapelverarbeitung…', run: () => (window.native ? openDialog('batch') : toast('Nur in der Desktop-App')) },
         { label: 'Photomerge (Panorama)…', run: ADV('photomerge') },
         { label: 'Zu HDR zusammenfügen…', run: ADV('mergeHdr') },
+        '-',
+        { label: 'Skript ausführen…', run: () => import('./state.js').then((m) => m.runScriptFile()) },
       ] },
       { label: 'Platzieren…', run: placeFile, enabled: hasDoc },
       '-',
@@ -133,6 +136,10 @@ export const MENUS = [
       { label: 'Modus', sub: [
         { label: 'Graustufen', run: IMAGE.grayscale, enabled: hasDoc },
         { label: 'RGB-Farbe ✓', enabled: () => false },
+      ] },
+      { label: () => `Farbprofil (${(doc() && doc().profile) || 'sRGB'})`, sub: [
+        { label: 'Profil zuweisen…', run: COLOR.assign, enabled: hasDoc },
+        { label: 'In Profil umwandeln…', run: COLOR.convert, enabled: hasDoc },
       ] },
       '-',
       { label: 'Korrekturen', sub: [
@@ -318,6 +325,8 @@ export const MENUS = [
     id: 'filter', label: 'Filter', items: [
       { label: () => `Letzter Filter${S.lastFilter ? ': ' + FILTERS[S.lastFilter].name.replace('…', '') : ''}`, key: 'Alt+Strg+F', run: () => S.lastFilter && runFilter(S.lastFilter), enabled: () => hasDoc() && !!S.lastFilter },
       '-',
+      { label: 'Camera-Raw-Filter…', key: 'Umschalt+Strg+A', run: () => runAdjustment('cameraRaw'), enabled: hasDoc },
+      { label: 'Objektivkorrektur…', key: 'Umschalt+Strg+R', run: () => runFilter('lensCorrection'), enabled: hasDoc },
       { label: 'Verflüssigen…', key: 'Umschalt+Strg+X', run: () => openDialog('liquify'), enabled: hasDoc },
       '-',
       ...Object.entries(filterGroups).map(([g, items]) => ({ label: g, sub: items })),
@@ -331,6 +340,12 @@ export const MENUS = [
       { label: 'Auszoomen', key: 'Strg+-', run: () => VIEW.zoomBy(0.8), enabled: hasDoc },
       { label: 'Ganzes Bild', key: 'Strg+0', run: VIEW.fit, enabled: hasDoc },
       { label: '100 %', key: 'Strg+1', run: VIEW.actual, enabled: hasDoc },
+      { label: 'Ansicht drehen', sub: [
+        { label: '15° nach links', run: () => { const d = doc(); d.viewRot = (((d.viewRot || 0) - 15 + 540) % 360) - 180; emit(); }, enabled: hasDoc },
+        { label: '15° nach rechts', run: () => { const d = doc(); d.viewRot = (((d.viewRot || 0) + 15 + 540) % 360) - 180; emit(); }, enabled: hasDoc },
+        { label: 'Drehung zurücksetzen', key: 'Umschalt+Esc', run: () => { const d = doc(); d.viewRot = 0; emit(); }, enabled: () => doc() && !!doc().viewRot },
+        { label: 'Ansicht-drehen-Werkzeug', run: () => setTool('view', 'rotate') },
+      ] },
       '-',
       { label: 'Bildschirmmodus wechseln', key: 'F', run: cycleScreenMode },
       { label: 'Kanäle', sub: [
@@ -382,9 +397,11 @@ export const MENUS = [
       { label: 'Funktionsübersicht', run: () => openDialog('features') },
       '-',
       { label: 'Plugin-Befehle', sub: () => (PLUGIN_COMMANDS.length ? PLUGIN_COMMANDS.map((c) => ({ label: c.label, run: () => { try { c.run(); } catch (e) { toast('Plugin-Fehler: ' + e.message); } } })) : [{ label: '(keine)', enabled: () => false }]) },
+      { label: 'Fehlerprotokoll öffnen', run: () => (window.native ? window.native.openErrorLog() : toast('Nur in der Desktop-App')) },
       { label: 'Plugin-Ordner öffnen', run: () => (window.native ? window.native.pluginsOpen() : toast('Nur in der Desktop-App')) },
       { label: 'Plugins neu laden', run: () => loadPlugins().then((n) => toast(`${n} Plugin(s) geladen${PLUGIN_ERRORS.length ? ' – Fehler: ' + PLUGIN_ERRORS.join('; ') : ''}`)) },
       '-',
+      { label: 'Nach Updates suchen…', run: () => import('./state.js').then((m) => m.checkUpdates(false)) },
       { label: 'Über Lumora', run: () => openDialog('about') },
     ],
   },

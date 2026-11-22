@@ -154,7 +154,7 @@ export function readPsd(bytes, name) {
 let lastWarnings = [];
 export function psdWarnings() { return lastWarnings; }
 
-export function writePsd(d) {
+export function writePsd(d, opts = {}) {
   lastWarnings = [];
   const W = d.w, H = d.h;
   const node = (l) => {
@@ -188,6 +188,6 @@ export function writePsd(d) {
   };
   const children = childrenOf(d.layers, null).map(node);
   const flat = flattenToCanvas(d);
-  const buf = agWrite({ width: W, height: H, children, canvas: flat }, { generateThumbnail: false, noBackground: true, invalidateTextLayers: true });
+  const buf = agWrite({ width: W, height: H, children, canvas: flat }, { generateThumbnail: false, noBackground: true, invalidateTextLayers: true, psb: !!opts.psb });
   return new Uint8Array(buf);
 }

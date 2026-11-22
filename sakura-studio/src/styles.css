@@ -560,3 +560,7 @@ kbd { background: var(--input); border: 1px solid var(--line); border-bottom-wid
 .note-head { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); }
 .note-row textarea { width: 100%; resize: vertical; margin-top: 3px; }
 .tstyles { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.glyphs { max-height: 60vh; overflow-y: auto; }
+.glyph-grid { display: grid; grid-template-columns: repeat(auto-fill, 28px); gap: 3px; margin: 2px 0 6px; }
+.glyph-grid button { height: 28px; border-radius: 4px; background: var(--panel-2); font-size: 15px; }
+.glyph-grid button:hover:not(:disabled) { background: var(--accent-mid); }

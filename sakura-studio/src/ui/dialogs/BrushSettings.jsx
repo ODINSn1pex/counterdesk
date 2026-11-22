@@ -31,6 +31,8 @@ export function BrushSettingsDialog() {
             <Num label="Winkel" value={o.angle} min={-180} max={180} unit="°" onChange={set('angle')} />
             <Num label="Rundheit" value={Math.round(o.roundness * 100)} min={5} max={100} unit="%" onChange={set('roundness', (v) => v / 100)} />
             <Num label="Abstand" value={Math.round(o.spacing * 100)} min={1} max={1000} unit="%" onChange={set('spacing', (v) => v / 100)} />
+            <Check label="Airbrush (Farbe baut sich beim Halten auf)" value={o.airbrush} onChange={set('airbrush')} />
+            <Check label="Winkel folgt Stiftneigung/-drehung (Grafiktablett)" value={o.penAngle} onChange={set('penAngle')} />
           </>}
           {tab === 'scatter' && <>
             <Num label="Größen-Jitter" {...pct('jitter')} />

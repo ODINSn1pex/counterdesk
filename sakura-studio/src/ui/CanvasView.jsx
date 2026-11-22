@@ -379,19 +379,25 @@ export function CanvasView() {
       if (S.prefs.brushCursor === 'both' || r < 4) { x.beginPath(); x.moveTo(cur.sx - 5, cur.sy); x.lineTo(cur.sx + 5, cur.sy); x.moveTo(cur.sx, cur.sy - 5); x.lineTo(cur.sx, cur.sy + 5); x.stroke(); }
       x.restore();
     }
-    if (S.ui.showRulers) drawRulers(x, g, cw, ch, dd, col);
+    if (S.ui.showRulers && !dd.viewRot) drawRulers(x, g, cw, ch, dd, col);
   }
 
   // ---------- Ereignisse ----------
   function toDoc(e, base) {
-    const r = base || canvasRef.current.getBoundingClientRect();
-    const sx = e.clientX - r.left, sy = e.clientY - r.top;
+    // Bezug ist der (nicht gedrehte) Rahmen; bei gedrehter Ansicht wird der Punkt zurückgedreht
+    const r = base || wrapRef.current.getBoundingClientRect();
+    const rsx = e.clientX - r.left, rsy = e.clientY - r.top;
+    let sx = rsx, sy = rsy;
+    const dd0 = doc(), rot = (dd0 && dd0.viewRot) || 0;
+    if (rot) { const a = -rot * Math.PI / 180, mx = r.width / 2, my = r.height / 2, dx = rsx - mx, dy = rsy - my; sx = mx + dx * Math.cos(a) - dy * Math.sin(a); sy = my + dx * Math.sin(a) + dy * Math.cos(a); }
     const g = state.current.g || { ox: 0, oy: 0, z: 1, cx: 0, cy: 0 };
     return {
+      rsx, rsy, vw: r.width, vh: r.height,
       sx, sy, p: { x: (sx - g.ox) / g.z, y: (sy - g.oy) / g.z },
       shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, button: e.button,
       zoom: g.z, cx: sx - g.cx, cy: sy - g.cy,
       pressure: e.pointerType === 'pen' ? Math.max(0.05, e.pressure) : 1,
+      twist: e.pointerType === 'pen' ? (e.twist || (e.tiltX || e.tiltY ? Math.atan2(e.tiltY, e.tiltX) * 180 / Math.PI : 0)) : null,
     };
   }
 
@@ -404,7 +410,7 @@ export function CanvasView() {
     if (S.ui.menu) { S.ui.menu = null; emit(); }
     if (view.anim) { view.anim = null; emit(); }
     const ev = toDoc(e);
-    if (S.ui.showRulers && (ev.sx < RULER || ev.sy < RULER)) {
+    if (S.ui.showRulers && !(doc() && doc().viewRot) && (ev.sx < RULER || ev.sy < RULER)) {
       if (ev.sx < RULER && ev.sy < RULER) return;
       state.current.guideDrag = ev.sy < RULER ? 'h' : 'v';
       canvasRef.current.setPointerCapture(e.pointerId);
@@ -431,7 +437,7 @@ export function CanvasView() {
     if (e.buttons || TL.opState()) {
       const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
       if (evs && evs.length > 1) {
-        const r = canvasRef.current.getBoundingClientRect();
+        const r = wrapRef.current.getBoundingClientRect();
         safe(() => evs.forEach((ce) => TL.pointerMove(toDoc(ce, r))));
       } else safe(() => TL.pointerMove(ev));
     }
@@ -496,7 +502,7 @@ export function CanvasView() {
     <div className="canvas-wrap" ref={wrapRef} data-tut="canvas" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <canvas
         ref={canvasRef}
-        style={{ cursor }}
+        style={{ cursor, transform: d && d.viewRot ? `rotate(${d.viewRot}deg)` : undefined }}
         onPointerDown={onPointerDown}
         onMouseDown={(e) => e.preventDefault()}
         onPointerMove={onPointerMove}

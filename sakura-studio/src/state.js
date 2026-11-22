@@ -67,7 +67,7 @@ export const S = {
   brush: { size: 30, hardness: 0.8, opacity: 1, flow: 1, spacing: 0.12, mode: 'normal', smoothing: 0.2, angle: 0, roundness: 1, scatter: 0, jitter: 0, shape: 'round',
     hueJitter: 0, satJitter: 0, briJitter: 0, fgbgJitter: 0, opacityJitter: 0, flowJitter: 0, angleJitter: 0, angleFollow: false,
     texture: '', textureDepth: 0.5, textureScale: 1, textureInvert: false, dual: '', dualSize: 20, dualScatter: 0.5,
-    symmetry: 'none', symSegments: 6, wet: 0.5, load: 0.5, mix: 0.5, reload: true },
+    symmetry: 'none', symSegments: 6, wet: 0.5, load: 0.5, mix: 0.5, reload: true, airbrush: false, penAngle: false },
   eraser: { size: 40, hardness: 0.7, opacity: 1, flow: 1, tolerance: 40 },
   pencil: { size: 4, opacity: 1 },
   stampOpts: { aligned: true, sampleAll: false, pattern: 'sakura' },
@@ -230,10 +230,11 @@ export function closeDoc(id, force = false) {
 
 // ---------------- Datei-IO ----------------
 const IMG_FILTERS = [
-  { name: 'Alle unterstützten', extensions: ['lumora', 'sakura', 'psd', 'psb', 'tif', 'tiff', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif', 'cr2', 'cr3', 'nef', 'arw', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw'] },
+  { name: 'Alle unterstützten', extensions: ['lumora', 'sakura', 'psd', 'psb', 'pdf', 'tif', 'tiff', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif', 'cr2', 'cr3', 'nef', 'arw', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw'] },
   { name: 'Kamera-RAW (Vorschau)', extensions: ['cr2', 'cr3', 'nef', 'nrw', 'arw', 'dng', 'orf', 'rw2', 'raf', 'pef', 'srw'] },
   { name: 'Lumora-Projekt', extensions: ['lumora', 'sakura'] },
-  { name: 'Photoshop-Datei (PSD)', extensions: ['psd'] },
+  { name: 'Photoshop-Datei (PSD/PSB)', extensions: ['psd', 'psb'] },
+  { name: 'PDF-Dokument', extensions: ['pdf'] },
   { name: 'Bilder', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif'] },
 ];
 
@@ -277,6 +278,7 @@ function addRecent(p) {
 export async function openBytes(name, bytes, path, opts = {}) {
   const ext = name.split('.').pop().toLowerCase();
   if (PRESET_EXT.includes(ext)) { await importPresetFiles([{ name, data: bytes }]); return; }
+  if (ext === 'pdf') { await importPdf(name, bytes); return; }
   try {
     let d;
     if (ext === 'lumora' || ext === 'sakura') d = await loadProject(new TextDecoder().decode(bytes), name);
@@ -395,13 +397,13 @@ export async function saveProject(saveAs = false) {
   emit();
 }
 
-export async function exportPsd(path) {
+export async function exportPsd(path, psb = false) {
   const d = doc(); if (!d) return;
-  const bytes = writePsd(d);
+  const bytes = writePsd(d, { psb });
   const warn = psdWarnings();
   if (warn.length) setTimeout(() => toast('Hinweis: ' + warn.join(', '), 5000), 400);
   const base = d.name.replace(/\.[^.]+$/, '');
-  const p = await saveBytes(base + '.psd', bytes, [{ name: 'Photoshop (PSD)', extensions: ['psd'] }], path || null);
+  const p = await saveBytes(base + (psb ? '.psb' : '.psd'), bytes, [psb ? { name: 'Photoshop Großes Dokumentformat (PSB)', extensions: ['psb'] } : { name: 'Photoshop (PSD)', extensions: ['psd'] }], path || null);
   if (!p) return;
   if (path) d.dirty = false;
   toast('PSD gespeichert: ' + p.split(/[\\/]/).pop());
@@ -424,7 +426,8 @@ export async function exportImage(fmt = 'png', quality = 0.92, scale = 1, transp
     const x = ctx2d(s); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, s.width, s.height); c = s;
   }
   const mime = fmt === 'jpeg' ? 'image/jpeg' : fmt === 'webp' ? 'image/webp' : 'image/png';
-  const bytes = await canvasToBytes(c, mime, quality);
+  let bytes = await canvasToBytes(c, mime, quality);
+  if (S.prefs.embedProfile !== false) { const { embedIcc } = await import('./engine/color.js'); bytes = await embedIcc(bytes, mime, d.profile || 'sRGB'); }
   const ext = fmt === 'jpeg' ? 'jpg' : fmt;
   const base = d.name.replace(/\.[^.]+$/, '');
   const p = await saveBytes(`${base}.${ext}`, bytes, [{ name: ext.toUpperCase(), extensions: [ext] }]);
@@ -459,7 +462,7 @@ export async function serializeProject(d) {
   return JSON.stringify({
     app: 'Lumora', version: 1, w: d.w, h: d.h, name: d.name, active: d.active, ppi: d.ppi,
     guides: d.guides, paths: d.paths, artboards: d.artboards || [], frames: d.frames || [],
-    globalLight: d.globalLight, comps: d.comps || [], samplers: d.samplers || [], counts: d.counts || [], notes: d.notes || [], slices: d.slices || [],
+    profile: d.profile || 'sRGB', globalLight: d.globalLight, comps: d.comps || [], samplers: d.samplers || [], counts: d.counts || [], notes: d.notes || [], slices: d.slices || [],
     layers: d.layers.map((l) => {
       const props = layerProps(l);
       const smartSrc = props.smart ? toUrl(props.smart.src) : null;
@@ -494,6 +497,7 @@ async function loadProject(text, name) {
   const remap = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [idMap.get(Number(k)) ?? k, v]));
   d.comps = (j.comps || []).map((c) => ({ ...c, state: remap(c.state) }));
   if (j.globalLight) d.globalLight = j.globalLight;
+  d.profile = j.profile || 'sRGB';
   d.samplers = j.samplers || []; d.counts = j.counts || []; d.notes = j.notes || []; d.slices = j.slices || [];
   d.layers = normalizeTree(d.layers);
   for (const a of j.alpha || []) { const c = makeCanvas(j.w, j.h); ctx2d(c).drawImage(await loadImage(a.png), 0, 0); d.alphaChannels.push({ name: a.name, canvas: c }); }
@@ -592,7 +596,7 @@ function renderSubtree(d, l) {
   return c;
 }
 
-export const ADJ_LAYER_TYPES = ['brightness', 'levels', 'curves', 'exposure', 'vibrance', 'hueSat', 'colorBalance', 'blackWhite', 'photoFilter', 'channelMixer', 'invert', 'posterize', 'threshold', 'gradientMap', 'selectiveColor'];
+export const ADJ_LAYER_TYPES = ['cameraRaw', 'brightness', 'levels', 'curves', 'exposure', 'vibrance', 'hueSat', 'colorBalance', 'blackWhite', 'photoFilter', 'channelMixer', 'invert', 'posterize', 'threshold', 'gradientMap', 'selectiveColor'];
 
 export const L = {
   add: () => layerOp((d) => { insertAbove(d, new Layer(d.w, d.h, `Ebene ${d.layers.length}`)); }, 'Neue Ebene'),
@@ -1667,7 +1671,8 @@ export async function exportSet(items, fmt = 'png', what = 'Bilder', quality = 0
   for (const it of items) {
     let c = it.canvas;
     if (fmt === 'jpeg') { const t = makeCanvas(c.width, c.height); const tx = ctx2d(t); tx.fillStyle = '#fff'; tx.fillRect(0, 0, t.width, t.height); tx.drawImage(c, 0, 0); c = t; }
-    const bytes = await canvasToBytes(c, mime, quality);
+    let bytes = await canvasToBytes(c, mime, quality);
+    if (S.prefs.embedProfile !== false) { const { embedIcc } = await import('./engine/color.js'); bytes = await embedIcc(bytes, mime, (doc() && doc().profile) || 'sRGB'); }
     if (dir) await window.native.writeFileIn(dir, `${safe(it.name)}.${ext}`, bytes);
     else if (!(await saveBytes(`${safe(it.name)}.${ext}`, bytes, [{ name: ext.toUpperCase(), extensions: [ext] }]))) break;
     n++;
@@ -1741,4 +1746,95 @@ export function newDocFromCanvas(c, name, empty = false) {
   d.ppi = S.prefs.defaultPpi || 72;
   addDoc(d);
   return d;
+}
+
+// PDF öffnen: Seite und Auflösung wählen, jede Seite optional als eigene Ebene
+async function importPdf(name, bytes) {
+  let info;
+  S.ui.busy = 'PDF wird gelesen'; emit();
+  try { const P = await import('./io/pdf.js'); info = await P.pdfInfo(bytes); info.P = P; }
+  catch (e) { toast('PDF konnte nicht gelesen werden: ' + e.message); return; }
+  finally { S.ui.busy = null; emit(); }
+  const v = await askForm('PDF importieren', [
+    { key: 'page', type: 'num', label: 'Seite', min: 1, max: info.pages, value: 1 },
+    { key: 'all', type: 'check', label: `Alle ${info.pages} Seiten als Ebenen`, value: false },
+    { key: 'ppi', type: 'num', label: 'Auflösung', min: 36, max: 600, unit: ' ppi', value: 150 },
+  ], { hint: `${info.pages} Seite(n), Seitengröße ${Math.round(info.w / 72 * 25.4)} × ${Math.round(info.h / 72 * 25.4)} mm. Text und Vektoren werden gerastert.` });
+  if (!v) return;
+  S.ui.busy = 'PDF wird gerastert'; emit();
+  try {
+    const pages = v.all ? Array.from({ length: Math.min(info.pages, 50) }, (_, i) => i + 1) : [Math.round(v.page)];
+    const canv = [];
+    for (const n of pages) canv.push(await info.P.renderPdfPage(info.doc, n, v.ppi));
+    const W = Math.max(...canv.map((c) => c.width)), H = Math.max(...canv.map((c) => c.height));
+    const d = new Doc(W, H, name.replace(/\.pdf$/i, '') + (pages.length === 1 ? ` (Seite ${pages[0]})` : ''));
+    d.ppi = v.ppi;
+    canv.forEach((c, i) => { const l = new Layer(W, H, `Seite ${pages[i]}`); l.ctx.drawImage(c, 0, 0); l.visible = i === 0 || !v.all ? true : false; d.layers.push(l); });
+    d.layers.reverse(); d.active = d.layers.length - 1;
+    if (v.all) d.layers.forEach((l, i) => { l.visible = i === d.layers.length - 1; });
+    d.commit('PDF öffnen'); d.dirty = false; addDoc(d);
+  } catch (e) { toast('PDF-Import fehlgeschlagen: ' + e.message); }
+  finally { S.ui.busy = null; emit(); }
+}
+
+// Skript ausführen: JavaScript-Datei mit Zugriff auf die Lumora-Schnittstelle
+export async function runScriptFile() {
+  let files;
+  if (window.native) files = await window.native.openDialog({ title: 'Skript ausführen', filters: [{ name: 'JavaScript', extensions: ['js', 'mjs'] }] });
+  else files = await new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.accept = '.js,.mjs'; i.onchange = async () => res([{ name: i.files[0].name, data: new Uint8Array(await i.files[0].arrayBuffer()) }]); i.click(); });
+  const f = files && files[0]; if (!f) return;
+  const code = new TextDecoder().decode(f.data);
+  try {
+    const api = { S, doc, view, commit, toast, emit, L, IMAGE, EDIT, SELECT, Layer, makeCanvas, ctx2d, askForm, flattenToCanvas, openDocument: openBytes };
+    const fn = new Function('lumora', '"use strict"; return (async () => {\n' + code + '\n})();');
+    await fn(api);
+    view.request(); emit();
+    toast('Skript ausgeführt: ' + f.name);
+  } catch (e) { console.error(e); toast('Skriptfehler: ' + e.message, 6000); }
+}
+
+// ---------------- Farbprofile ----------------
+export const COLOR = {
+  async assign() {
+    const d = doc(); if (!d) return;
+    const { PROFILES } = await import('./engine/color.js');
+    const v = await askForm('Profil zuweisen', [{ key: 'p', type: 'select', label: 'Profil', options: Object.keys(PROFILES).map((k) => [k, k]), value: d.profile || 'sRGB' }],
+      { hint: 'Ändert nur die Kennzeichnung – die Pixelwerte bleiben gleich. Beim Export wird dieses ICC-Profil eingebettet.' });
+    if (!v) return; d.profile = v.p; commit('Profil zuweisen'); emit();
+  },
+  async convert() {
+    const d = doc(); if (!d) return;
+    const C = await import('./engine/color.js');
+    const v = await askForm('In Profil umwandeln', [
+      { key: 'from', type: 'info', label: `Quellprofil: ${d.profile || 'sRGB'}` },
+      { key: 'p', type: 'select', label: 'Zielprofil', options: Object.keys(C.PROFILES).map((k) => [k, k]), value: (d.profile || 'sRGB') === 'sRGB' ? 'Display P3' : 'sRGB' },
+    ], { hint: 'Rechnet die Pixel so um, dass die Farben im Zielprofil gleich aussehen (relativ farbmetrisch). Hinweis: Die Bildschirmanzeige von Lumora geht von sRGB aus.' });
+    if (!v || v.p === (d.profile || 'sRGB')) return;
+    const from = d.profile || 'sRGB';
+    for (const l of d.layers) {
+      const tgts = [l.type === 'raster' || l.type === 'smart' ? l.canvas : null, l.smart && l.smart.src].filter(Boolean);
+      for (const c of tgts) { const x = ctx2d(c), id = x.getImageData(0, 0, c.width, c.height); C.convertPixels(id.data, from, v.p); x.putImageData(id, 0, 0); }
+      l.touch();
+    }
+    d.profile = v.p; view.request(); commit('In Profil umwandeln');
+    toast(`In „${v.p}“ umgewandelt`);
+  },
+};
+
+// ---------------- Updates ----------------
+export const APP_VERSION = '5.0.0';
+const vnum = (v) => String(v || '0').split('.').map((x) => parseInt(x, 10) || 0);
+const newer = (a, b) => { const x = vnum(a), y = vnum(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+export async function checkUpdates(silent = false) {
+  const url = (S.prefs.updateUrl || '').trim();
+  if (!url) { if (!silent) toast('Kein Update-Server eingetragen (Voreinstellungen › Allgemein › Update-Adresse)', 5000); return; }
+  try {
+    const r = await fetch(url + (url.includes('?') ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    if (j.version && newer(j.version, APP_VERSION)) {
+      const v = await askForm('Update verfügbar', [{ key: 'i', type: 'info', label: `Lumora ${j.version} ist verfügbar (installiert: ${APP_VERSION}).${j.notes ? ' ' + j.notes : ''}` }], { okLabel: 'Herunterladen' });
+      if (v && j.url) window.open(j.url, '_blank');
+    } else if (!silent) toast(`Lumora ist aktuell (${APP_VERSION})`);
+  } catch (e) { if (!silent) toast('Update-Prüfung fehlgeschlagen: ' + e.message, 5000); }
 }

@@ -14,11 +14,11 @@ export const TOOL_HELP = {
   gradient: ['Verlauf & Füllwerkzeug (G)', 'Verlauf: Linie ziehen (linear, radial, Winkel, reflektiert, Raute). Füllwerkzeug: füllt zusammenhängende Flächen mit Farbe oder Muster.'],
   blur: ['Weichzeichner, Scharfzeichner, Wischfinger (R)', 'Lokal weicher oder schärfer malen; der Wischfinger verschmiert Farben wie nasse Farbe.'],
   dodge: ['Abwedler, Nachbelichter, Schwamm (O)', 'Hellt auf oder dunkelt ab (Tiefen, Mitteltöne, Lichter); der Schwamm erhöht oder verringert die Sättigung.'],
-  pen: ['Zeichenstift (P)', 'Präzise Pfade: Klick = Ecke, Ziehen = Kurve. Pfade können gefüllt, nachgezogen, in Auswahlen umgewandelt oder für Text auf Pfad genutzt werden.'],
+  pen: ['Zeichenstift, Freiform & Rundung (P)', 'Zeichenstift: Klick = Ecke, Ziehen = Kurve. Freiform-Zeichenstift: frei zeichnen. Rundungszeichenstift: nur klicken – die Kurven entstehen automatisch, Alt+Klick setzt einen Eckpunkt. Pfade können gefüllt, nachgezogen, in Auswahlen oder Vektormasken umgewandelt oder für Text auf Pfad genutzt werden.'],
   type: ['Text (T)', 'Klicken = Punkttext, Rahmen aufziehen = Absatztext mit automatischem Zeilenumbruch und Blocksatz. Strg+Enter beendet. „Verkrümmen…“ biegt Text (Bogen, Flagge, Welle, Fisch …) und er bleibt bearbeitbar. Im Zeichen-/Absatz-Bedienfeld lassen sich Zeichen- und Absatzformate speichern. Rechtschreibprüfung mit Vorschlägen per Rechtsklick; Bearbeiten › Text suchen und ersetzen.'],
   select: ['Direktauswahl (A)', 'Verschiebt einzelne Ankerpunkte und Griffe eines Pfades oder den ganzen Pfad.'],
   shape: ['Formen (U)', 'Rechteck, abgerundetes Rechteck, Ellipse, Dreieck, Polygon, Linie, Stern, Herz, Pfeil, Sprechblase … Formen bleiben Vektoren: Farbe, Kontur, Größe und jeder Eckradius einzeln im Eigenschaften-Bedienfeld. Ebene › Formen kombinieren: vereinigen, subtrahieren, Schnittmenge, ausschließen.'],
-  view: ['Hand & Zoom (H/Z)', 'Bild verschieben bzw. zoomen. Tipp: Leertaste halten = Hand, Strg + Mausrad = Zoom.'],
+  view: ['Hand, Ansicht drehen & Zoom (H/Z)', 'Bild verschieben, die Ansicht drehen (wie ein Blatt Papier, Umschalt = 15°-Schritte, Umschalt+Esc setzt zurück) oder zoomen. Tipp: Leertaste halten = Hand, Strg + Mausrad = Zoom.'],
 };
 
 const T = (id) => ({ title: TOOL_HELP[id][0], text: TOOL_HELP[id][1], target: 'tool-' + id, tool: id });
@@ -81,6 +81,8 @@ export const CHAPTERS = [
     { title: 'Himmel austauschen & Hochskalieren', text: 'Bearbeiten › Himmel austauschen erkennt den Himmel automatisch und setzt einen neuen ein – inklusive passender Lichtstimmung. Bild › Hochskalieren vergrößert mit hochwertiger Interpolation und Nachschärfen.', target: 'menu' },
     { title: 'Panorama, HDR & Fokus-Stacking', text: 'Datei › Automatisieren › Photomerge setzt überlappende Fotos zum Panorama zusammen, „Zu HDR zusammenfügen“ verschmilzt eine Belichtungsreihe. Bearbeiten › Ebenen automatisch ausrichten/überblenden richtet Fotos aus und stapelt den Fokus.', target: 'menu' },
     { title: 'Vektormasken & Ebenenkompositionen', text: 'Ebene › Vektormaske nutzt einen Zeichenstift-Pfad als gestochen scharfe Maske. Ebenenkompositionen (Bedienfeld „Komp.“) speichern verschiedene Varianten eines Layouts zum schnellen Umschalten und Exportieren.', target: 'panel-props' },
+    { title: 'Camera-Raw-Filter & Objektivkorrektur', text: 'Filter › Camera-Raw-Filter (Umschalt+Strg+A): Temperatur, Belichtung, Lichter, Tiefen, Klarheit, Dunst entfernen und Dynamik – auch als Einstellungsebene. Filter › Objektivkorrektur entfernt Verzeichnung, Farbsäume und Vignetten.', target: 'menu' },
+    { title: 'Farbprofile', text: 'Bild › Farbprofil: sRGB, Display P3 oder Adobe RGB zuweisen bzw. umwandeln. Beim Export wird das passende ICC-Profil eingebettet, damit andere Programme die Farben richtig zeigen.', target: 'menu' },
     { title: 'Vorgaben & Export', text: 'Bearbeiten › Vorgaben importieren liest Photoshop-Pinsel (.abr), Muster (.pat), Stile (.asl), Verläufe (.grd) und Farbfelder (.aco). Datei › Exportieren: SVG, PDF, mehrere Größen (1x/2x/3x) und Slices.', target: 'menu' },
   ] },
   { name: 'Einstellungen & Hilfe', steps: [

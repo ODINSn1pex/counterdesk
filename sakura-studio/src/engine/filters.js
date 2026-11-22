@@ -836,3 +836,124 @@ function valueNoise(w, h) {
 }
 
 export { cssFilter, pix, boxBlurAlpha };
+
+// ---------- Camera-Raw-Filter (auch als Einstellungsebene) ----------
+ADJUSTMENTS.cameraRaw = {
+  name: 'Camera-Raw-Filter…',
+  params: [
+    { key: 'temp', label: 'Temperatur', min: -100, max: 100, def: 0 },
+    { key: 'tint', label: 'Tönung', min: -100, max: 100, def: 0 },
+    { key: 'exposure', label: 'Belichtung', min: -4, max: 4, step: 0.05, def: 0 },
+    { key: 'contrast', label: 'Kontrast', min: -100, max: 100, def: 0 },
+    { key: 'highlights', label: 'Lichter', min: -100, max: 100, def: 0 },
+    { key: 'shadows', label: 'Tiefen', min: -100, max: 100, def: 0 },
+    { key: 'whites', label: 'Weiß', min: -100, max: 100, def: 0 },
+    { key: 'blacks', label: 'Schwarz', min: -100, max: 100, def: 0 },
+    { key: 'clarity', label: 'Klarheit', min: -100, max: 100, def: 0 },
+    { key: 'dehaze', label: 'Dunst entfernen', min: -100, max: 100, def: 0 },
+    { key: 'vibrance', label: 'Dynamik', min: -100, max: 100, def: 0 },
+    { key: 'saturation', label: 'Sättigung', min: -100, max: 100, def: 0 },
+  ],
+  apply: (c, p) => {
+    const w = c.width, h = c.height;
+    // Klarheit: lokaler Kontrast über großen Weichzeichner
+    let bl = null;
+    if (p.clarity) bl = ctx2d(cssFilter(c, `blur(${Math.max(4, Math.min(w, h) / 60)}px)`)).getImageData(0, 0, w, h).data;
+    // Dunst: dunkelster Wert als Dunstschätzung (global)
+    let haze = 0;
+    if (p.dehaze) { const d0 = ctx2d(c).getImageData(0, 0, w, h).data; let s = 0, n = 0; for (let i = 0; i < d0.length; i += 4 * 17) { s += Math.min(d0[i], d0[i + 1], d0[i + 2]); n++; } haze = n ? s / n / 255 : 0; }
+    const ev = Math.pow(2, p.exposure || 0);
+    const wr = 1 + p.temp / 250 + p.tint / 500, wg = 1 - p.tint / 250, wb = 1 - p.temp / 250 + p.tint / 500;
+    const con = 1 + p.contrast / 100;
+    return pix(c, (d) => {
+      for (let i = 0; i < d.length; i += 4) {
+        let r = d[i] / 255 * wr * ev, g = d[i + 1] / 255 * wg * ev, b = d[i + 2] / 255 * wb * ev;
+        if (p.dehaze) { const k = p.dehaze / 100 * haze * 0.9; r = (r - k) / (1 - k); g = (g - k) / (1 - k); b = (b - k) / (1 - k); }
+        let L = r * 0.299 + g * 0.587 + b * 0.114;
+        let nL = L;
+        // Lichter/Tiefen/Weiß/Schwarz als weiche Tonkurven-Bereiche
+        nL += p.highlights / 100 * 0.35 * Math.max(0, L - 0.5) * 2 * (1 - L);
+        nL += p.shadows / 100 * 0.45 * Math.max(0, 0.5 - L) * 2 * L * 2;
+        nL += p.whites / 100 * 0.2 * L * L;
+        nL += p.blacks / 100 * 0.2 * (1 - L) * (1 - L);
+        nL = (nL - 0.5) * con + 0.5;
+        if (bl) { const bL = (bl[i] * 0.299 + bl[i + 1] * 0.587 + bl[i + 2] * 0.114) / 255; nL += (L - bL) * p.clarity / 100 * 1.2 * (1 - Math.abs(L - 0.5)); }
+        const k = L > 1e-4 ? nL / L : 1;
+        r *= k; g *= k; b *= k;
+        if (!L) { r = g = b = nL; }
+        const m = (r + g + b) / 3, sat = (Math.max(r, g, b) - Math.min(r, g, b));
+        const amt = p.saturation / 100 + p.vibrance / 100 * (1 - Math.min(1, sat));
+        r += (r - m) * amt; g += (g - m) * amt; b += (b - m) * amt;
+        d[i] = r * 255; d[i + 1] = g * 255; d[i + 2] = b * 255;
+      }
+    });
+  },
+};
+
+// ---------- Objektivkorrektur ----------
+FILTERS.lensCorrection = {
+  group: 'Verzerrungsfilter', name: 'Objektivkorrektur…',
+  params: [
+    { key: 'distortion', label: 'Verzeichnung (− Kissen / + Tonne)', min: -100, max: 100, def: 0 },
+    { key: 'ca_r', label: 'Farbsaum Rot/Cyan', min: -100, max: 100, def: 0 },
+    { key: 'ca_b', label: 'Farbsaum Blau/Gelb', min: -100, max: 100, def: 0 },
+    { key: 'vignette', label: 'Vignette (− dunkler / + heller)', min: -100, max: 100, def: 0 },
+    { key: 'scale', label: 'Skalieren %', min: 50, max: 150, def: 100 },
+  ],
+  apply: (c, p) => {
+    const w = c.width, h = c.height, src = ctx2d(c).getImageData(0, 0, w, h).data;
+    const out = makeCanvas(w, h), oc = ctx2d(out), id = oc.createImageData(w, h), d = id.data;
+    const cx = w / 2, cy = h / 2, R = Math.hypot(cx, cy), k = p.distortion / 100 * 0.35, s = 100 / p.scale;
+    const kr = 1 + p.ca_r / 100 * 0.006, kb = 1 + p.ca_b / 100 * 0.006;
+    const samp = (x, y, ch) => {
+      if (x < 0 || y < 0 || x > w - 1 || y > h - 1) return -1;
+      const x0 = x | 0, y0 = y | 0, x1 = Math.min(w - 1, x0 + 1), y1 = Math.min(h - 1, y0 + 1), ax = x - x0, ay = y - y0;
+      const v = (xx, yy) => src[(yy * w + xx) * 4 + ch];
+      return (v(x0, y0) * (1 - ax) + v(x1, y0) * ax) * (1 - ay) + (v(x0, y1) * (1 - ax) + v(x1, y1) * ax) * ay;
+    };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const dx = (x - cx) * s, dy = (y - cy) * s, r2 = (dx * dx + dy * dy) / (R * R);
+      const f = 1 + k * r2;
+      const o = (y * w + x) * 4;
+      const sx = cx + dx * f, sy = cy + dy * f;
+      const rr = samp(cx + dx * f * kr, cy + dy * f * kr, 0), gg = samp(sx, sy, 1), bb = samp(cx + dx * f * kb, cy + dy * f * kb, 2), aa = samp(sx, sy, 3);
+      if (gg < 0 || aa < 0) { d[o + 3] = 0; continue; }
+      const vig = 1 + p.vignette / 100 * 0.8 * r2;
+      d[o] = (rr < 0 ? gg : rr) * vig; d[o + 1] = gg * vig; d[o + 2] = (bb < 0 ? gg : bb) * vig; d[o + 3] = aa;
+    }
+    oc.putImageData(id, 0, 0);
+    return out;
+  },
+};
+
+// ---------- Haut glätten (Hauttonmaske + kantenerhaltender Weichzeichner) ----------
+FILTERS.skinSmooth = {
+  group: 'Weichzeichnungsfilter', name: 'Haut glätten…',
+  params: [
+    { key: 'amount', label: 'Glättung %', min: 0, max: 100, def: 60 },
+    { key: 'radius', label: 'Radius (Px)', min: 1, max: 40, def: 6 },
+    { key: 'detail', label: 'Details erhalten %', min: 0, max: 100, def: 40 },
+    { key: 'all', label: 'Ganzes Bild (nicht nur Haut)', type: 'checkbox', def: false },
+  ],
+  apply: (c, p) => {
+    const w = c.width, h = c.height;
+    const bd = ctx2d(cssFilter(c, `blur(${p.radius}px)`)).getImageData(0, 0, w, h).data;
+    const thr = 12 + (100 - p.detail) * 0.6;
+    return pix(c, (d) => {
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        let m = 1;
+        if (!p.all) {
+          // Hautton in YCbCr
+          const cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b, cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
+          const dcb = Math.max(0, Math.abs(cb - 110) - 18) / 12, dcr = Math.max(0, Math.abs(cr - 152) - 20) / 12;
+          m = Math.max(0, 1 - Math.hypot(dcb, dcr));
+        }
+        const diff = Math.abs(r - bd[i]) + Math.abs(g - bd[i + 1]) + Math.abs(b - bd[i + 2]);
+        const edge = Math.max(0, 1 - diff / (thr * 3));
+        const a = m * edge * p.amount / 100;
+        d[i] = r + (bd[i] - r) * a; d[i + 1] = g + (bd[i + 1] - g) * a; d[i + 2] = b + (bd[i + 2] - b) * a;
+      }
+    });
+  },
+};

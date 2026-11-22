@@ -5,8 +5,8 @@ import { makeCanvas, ctx2d } from './util.js';
 
 // Modelle: silueta (Fotos, im Programm enthalten), isnet-anime (Illustrationen/Anime), isnet-general-use (Fotos, hohe Qualität)
 export const AI_MODELS = {
-  silueta: { file: 'silueta.onnx', size: 320, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], label: 'Standard (Fotos, schnell)', mb: 44 },
-  'isnet-anime': { file: 'isnet-anime.onnx', size: 1024, mean: [0.5, 0.5, 0.5], std: [1, 1, 1], label: 'Anime & Illustration (hohe Qualität)', mb: 176 },
+  silueta: { file: 'silueta.onnx', size: 320, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], label: 'Standard (Fotos, schnell)', mb: 44, url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/silueta.onnx' },
+  'isnet-anime': { file: 'isnet-anime.onnx', size: 1024, mean: [0.5, 0.5, 0.5], std: [1, 1, 1], label: 'Anime & Illustration (hohe Qualität)', mb: 176, url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-anime.onnx' },
   'isnet-general-use': { file: 'isnet-general-use.onnx', size: 1024, mean: [0.5, 0.5, 0.5], std: [1, 1, 1], label: 'Fotos (hohe Qualität, Download)', mb: 179, url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx' },
 };
 const sessions = {};
@@ -22,9 +22,17 @@ async function loadModelBytes(name) {
     const bytes = await window.native.aiModelRead(m.file);
     if (bytes) return bytes.buffer ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes;
   }
-  const res = await fetch(base() + 'models/' + m.file);
-  if (!res.ok) throw new Error('KI-Modell „' + m.label + '“ ist nicht installiert');
-  return res.arrayBuffer();
+  const res = await fetch(base() + 'models/' + m.file).catch(() => null);
+  if (res && res.ok) return res.arrayBuffer();
+  // Kompakt-Version: Modell beim ersten Gebrauch einmalig herunterladen
+  if (window.native && window.native.aiModelDownload && m.url) {
+    const st = await import('../state.js');
+    st.S.ui.busy = `KI-Modell „${m.label}“ wird einmalig geladen (${m.mb} MB)`; st.emit();
+    try { await window.native.aiModelDownload(m.file, m.url); } finally { st.S.ui.busy = null; st.emit(); }
+    const bytes = await window.native.aiModelRead(m.file);
+    if (bytes) return bytes.buffer ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes;
+  }
+  throw new Error('KI-Modell „' + m.label + '“ ist nicht installiert');
 }
 
 async function getSession(name) {
@@ -69,7 +77,7 @@ export async function aiSubjectMask(src, modelName = 'silueta') {
 }
 
 // ---------- Objekte entfernen: LaMa-Inpainting (Apache-2.0, über OpenCV Model Zoo) ----------
-AI_MODELS.lama = { file: 'lama.onnx', size: 512, label: 'Objekte entfernen (LaMa)', mb: 92 };
+AI_MODELS.lama = { file: 'lama.onnx', size: 512, label: 'Objekte entfernen (LaMa)', mb: 92, url: 'https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/inpainting_lama/inpainting_lama_2025jan.onnx' };
 export const lastInpaintInfo = {};
 
 // src: Bildquelle, mask: Canvas (Alpha = zu entfernen); liefert neues Canvas in Größe von src
