@@ -4,7 +4,7 @@ SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 
 !define APP "Lumora"
-!define VER "5.0.0"
+!define VER "5.1.0"
 !define EXE "Lumora.exe"
 !define UNKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Lumora"
 

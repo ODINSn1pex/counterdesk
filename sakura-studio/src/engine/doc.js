@@ -531,6 +531,10 @@ function applyVectorMask(cx, vm, w, h) {
   cx.globalCompositeOperation = 'destination-in'; cx.drawImage(m, 0, 0); cx.globalCompositeOperation = 'source-over';
 }
 
+// GPU-Rendering (wird von engine/gpu.js eingerichtet)
+export const GPU = { enabled: false, render: null, dither: true, info: null, fxSig: '' };
+export function layerSource(node, w, h, key) { return renderLayerFx(node, w, h, key); }
+
 const fxCache = new Map();
 function renderLayerFx(layer, w, h, key) {
   const fx = layer.fx || {};
@@ -879,7 +883,12 @@ export function composite(doc, target, opts = {}) {
     }
   }
   x.clearRect(0, 0, target.width, target.height);
-  if (!canCache || L.length < 3) {
+  let gpuDone = false;
+  if (GPU.enabled && GPU.render) {
+    try { GPU.fxSig = FX_ENV.angle + ',' + FX_ENV.altitude; const c = GPU.render(doc, opts); x.drawImage(c, 0, 0); gpuDone = true; }
+    catch (e) { console.warn('GPU-Rendering nicht möglich, CPU wird genutzt:', e); GPU.enabled = false; GPU.error = String(e && e.message || e); }
+  }
+  if (gpuDone) { /* fertig */ } else if (!canCache || L.length < 3) {
     drawLayers(L, x, w, h, opts);
   } else {
     const cache = cacheFor(doc);

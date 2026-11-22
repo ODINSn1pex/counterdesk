@@ -1822,7 +1822,7 @@ export const COLOR = {
 };
 
 // ---------------- Updates ----------------
-export const APP_VERSION = '5.0.0';
+export const APP_VERSION = '5.1.0';
 const vnum = (v) => String(v || '0').split('.').map((x) => parseInt(x, 10) || 0);
 const newer = (a, b) => { const x = vnum(a), y = vnum(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
 export async function checkUpdates(silent = false) {
@@ -1837,4 +1837,36 @@ export async function checkUpdates(silent = false) {
       if (v && j.url) window.open(j.url, '_blank');
     } else if (!silent) toast(`Lumora ist aktuell (${APP_VERSION})`);
   } catch (e) { if (!silent) toast('Update-Prüfung fehlgeschlagen: ' + e.message, 5000); }
+}
+
+// ---------------- Hohe Farbtiefe ----------------
+// 16-Bit-Export aus der Gleitkomma-Pipeline (GPU); ohne GPU aus dem 8-Bit-Ergebnis
+export async function export16(fmt = 'png') {
+  const d = doc(); if (!d) return;
+  S.ui.busy = '16-Bit-Export'; emit();
+  try {
+    let px;
+    const G = await import('./engine/gpu.js');
+    const D = await import('./engine/doc.js');
+    if (D.GPU.enabled) px = G.gpuFloatPixels(d);
+    else {
+      const c = flattenToCanvas(d), id = ctx2d(c).getImageData(0, 0, d.w, d.h).data, f = new Float32Array(id.length);
+      for (let i = 0; i < id.length; i++) f[i] = id[i] / 255;
+      px = { data: f, w: d.w, h: d.h };
+      toast('Hinweis: GPU-Pipeline aus – Datei hat 16 Bit, aber nur 8 Bit Genauigkeit', 4000);
+    }
+    const H = await import('./io/hibit.js');
+    let bytes = fmt === 'tiff' ? H.encodeTiff16(px, d.ppi || 72) : await H.encodePng16(px);
+    if (fmt === 'png' && S.prefs.embedProfile !== false) { const { embedIcc } = await import('./engine/color.js'); bytes = await embedIcc(bytes, 'image/png', d.profile || 'sRGB'); }
+    const ext = fmt === 'tiff' ? 'tif' : 'png';
+    const p = await saveBytes(d.name.replace(/\.[^.]+$/, '') + `-16bit.${ext}`, bytes, [{ name: (fmt === 'tiff' ? 'TIFF' : 'PNG') + ' 16 Bit', extensions: [ext] }]);
+    if (p) toast('16-Bit-Datei gespeichert: ' + String(p).split(/[\\/]/).pop());
+  } catch (e) { toast('16-Bit-Export fehlgeschlagen: ' + e.message, 5000); }
+  finally { S.ui.busy = null; emit(); }
+}
+export async function setGpu(on, dither) {
+  const G = await import('./engine/gpu.js');
+  const ok = G.enableGpu(on, dither);
+  view.request(); emit();
+  return ok;
 }

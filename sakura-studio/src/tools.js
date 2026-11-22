@@ -478,35 +478,67 @@ function bgEraserDab(st, p) {
 }
 
 // ---------- Verlauf ----------
+// Verlauf auf Ziel anwenden (fast = verkleinerte Vorschau beim Ziehen)
+function renderGradientOp(d, T, fast) {
+      const x = ctx2d(T.tgt.canvas);
+      x.save(); x.clearRect(0, 0, d.w, d.h); x.drawImage(T.before, 0, 0);
+      const g = makeCanvas(d.w, d.h); const gx = ctx2d(g);
+      if (fast && d.w * d.h > 600000) { const k = Math.sqrt(600000 / (d.w * d.h)), sw = Math.max(1, Math.round(d.w * k)), sh = Math.max(1, Math.round(d.h * k)); const sm = makeCanvas(sw, sh); drawGradient(ctx2d(sm), sw, sh, { x: T.a.x * k, y: T.a.y * k }, { x: T.b.x * k, y: T.b.y * k }, S.gradient); gx.imageSmoothingQuality = 'high'; gx.drawImage(sm, 0, 0, d.w, d.h); }
+      else drawGradient(gx, d.w, d.h, T.a, T.b, S.gradient);
+      if (d.selection && !S.ui.quickMask) { gx.globalCompositeOperation = 'destination-in'; gx.drawImage(d.selection, 0, 0); }
+      x.globalAlpha = S.gradient.opacity;
+      x.globalCompositeOperation = T.tgt.kind === 'mask' ? 'source-over' : (T.tgt.layer.lockAlpha ? 'source-atop' : gcoFor(S.gradient.mode));
+      if (T.tgt.kind === 'mask') {
+        // Verlauf als Maskenwerte: Luminanz → Alpha
+        const id = gx.getImageData(0, 0, d.w, d.h);
+        for (let i = 0; i < id.data.length; i += 4) { const v = (id.data[i] * 0.299 + id.data[i + 1] * 0.587 + id.data[i + 2] * 0.114) * id.data[i + 3] / 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = 255; id.data[i + 3] = v; }
+        gx.putImageData(id, 0, 0); x.clearRect(0, 0, d.w, d.h);
+      }
+      x.drawImage(g, 0, 0); x.restore();
+      if (T.tgt.layer) T.tgt.layer.touch(); else d.selRev++;
+      view.request();
+}
+
+// Verlauf in Gleitkomma berechnen und mit Dithering ausgeben (keine Streifen, wie „Dither“ in Photoshop)
+const colorParse = (() => { const c = makeCanvas(1, 1), x = ctx2d(c); const cache = new Map(); return (col) => { if (cache.has(col)) return cache.get(col); x.clearRect(0, 0, 1, 1); x.fillStyle = '#000'; x.fillStyle = col; x.fillRect(0, 0, 1, 1); const d = x.getImageData(0, 0, 1, 1).data; const v = [d[0], d[1], d[2], d[3] / 255]; cache.set(col, v); return v; }; })();
 export function drawGradient(x, w, h, a, b, opts) {
   const stops = gradientStops(S.gradients[opts.index]);
-  const st = opts.reverse ? stops.map((s) => ({ p: 1 - s.p, c: s.c })).reverse() : stops;
+  let st = (opts.reverse ? stops.map((s) => ({ p: 1 - s.p, c: s.c })).reverse() : stops).map((s) => ({ p: clamp(s.p, 0, 1), c: colorParse(s.c) })).sort((m, n) => m.p - n.p);
+  if (!st.length) return;
+  // Farbtabelle mit 4096 Stufen (vormultipliziert interpoliert)
+  const N = 4096, lut = new Float32Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    let k = 0; while (k < st.length - 1 && st[k + 1].p < t) k++;
+    const s0 = st[k], s1 = st[Math.min(k + 1, st.length - 1)];
+    const f = s1.p > s0.p ? clamp((t - s0.p) / (s1.p - s0.p), 0, 1) : (t >= s1.p ? 1 : 0);
+    const a0 = s0.c[3], a1 = s1.c[3], al = a0 + (a1 - a0) * f;
+    for (let c = 0; c < 3; c++) { const pm = s0.c[c] * a0 + (s1.c[c] * a1 - s0.c[c] * a0) * f; lut[i * 4 + c] = al > 0 ? pm / al : s0.c[c]; }
+    lut[i * 4 + 3] = al * 255;
+  }
   const len = Math.max(1, dist(a, b));
-  let g;
-  if (opts.type === 'radial') g = x.createRadialGradient(a.x, a.y, 0, a.x, a.y, len);
-  else if (opts.type === 'angle') { g = x.createConicGradient(Math.atan2(b.y - a.y, b.x - a.x), a.x, a.y); }
-  else if (opts.type === 'reflected') {
-    g = x.createLinearGradient(a.x - (b.x - a.x), a.y - (b.y - a.y), b.x, b.y);
-    st.forEach((s) => { g.addColorStop(0.5 - s.p / 2, s.c); g.addColorStop(0.5 + s.p / 2, s.c); });
-    x.fillStyle = g; x.fillRect(0, 0, w, h); return;
-  } else if (opts.type === 'diamond') {
-    const tmp = makeCanvas(256, 1); const tx = ctx2d(tmp);
-    const lg = tx.createLinearGradient(0, 0, 256, 0); st.forEach((s) => lg.addColorStop(s.p, s.c));
-    tx.fillStyle = lg; tx.fillRect(0, 0, 256, 1);
-    const lut = tx.getImageData(0, 0, 256, 1).data;
-    const id = x.createImageData(w, h);
-    const ang = Math.atan2(b.y - a.y, b.x - a.x), ca = Math.cos(-ang), sa = Math.sin(-ang);
-    for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) {
-      const dx = xx - a.x, dy = yy - a.y;
-      const u = dx * ca - dy * sa, v = dx * sa + dy * ca;
-      const t = clamp((Math.abs(u) + Math.abs(v)) / len, 0, 1);
-      const li = Math.min(255, (t * 255) | 0) * 4, o = (yy * w + xx) * 4;
-      id.data[o] = lut[li]; id.data[o + 1] = lut[li + 1]; id.data[o + 2] = lut[li + 2]; id.data[o + 3] = lut[li + 3];
+  const dx0 = (b.x - a.x) / len, dy0 = (b.y - a.y) / len;
+  const ang0 = Math.atan2(b.y - a.y, b.x - a.x), ca = Math.cos(-ang0), sa = Math.sin(-ang0);
+  const type = opts.type || 'linear', dither = S.prefs.ditherGradients !== false;
+  const id = new ImageData(w, h), D = id.data;
+  let seed = 12345;
+  for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) {
+    const px = xx + 0.5 - a.x, py = yy + 0.5 - a.y;
+    let t;
+    if (type === 'radial') t = Math.hypot(px, py) / len;
+    else if (type === 'angle') { let an = Math.atan2(py, px) - ang0; an = ((an % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI); t = an / (2 * Math.PI); }
+    else if (type === 'reflected') t = Math.abs(px * dx0 + py * dy0) / len;
+    else if (type === 'diamond') { const u = px * ca - py * sa, v = px * sa + py * ca; t = (Math.abs(u) + Math.abs(v)) / len; }
+    else t = (px * dx0 + py * dy0) / len;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const li = Math.round(t * (N - 1)) * 4, o = (yy * w + xx) * 4;
+    for (let c = 0; c < 4; c++) {
+      let v = lut[li + c];
+      if (dither) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; const r1 = seed / 0x7fffffff; seed = (seed * 1103515245 + 12345) & 0x7fffffff; v += r1 - seed / 0x7fffffff; }
+      D[o + c] = v;
     }
-    const tc = makeCanvas(w, h); ctx2d(tc).putImageData(id, 0, 0); x.drawImage(tc, 0, 0); return;
-  } else g = x.createLinearGradient(a.x, a.y, b.x, b.y);
-  st.forEach((s) => g.addColorStop(clamp(s.p, 0, 1), s.c));
-  x.fillStyle = g; x.fillRect(0, 0, w, h);
+  }
+  const tc = makeCanvas(w, h); ctx2d(tc).putImageData(id, 0, 0); x.drawImage(tc, 0, 0);
 }
 
 // ---------- Formen ----------
@@ -820,22 +852,7 @@ export function pointerMove(e) {
     case 'retouch': interp(T.st, p, S.retouch.size * 0.2, (q) => retouchAt(T, q)); break;
     case 'gradient': {
       T.b = e.shift ? snapAngle(T.a, p) : p;
-      const x = ctx2d(T.tgt.canvas);
-      x.save(); x.clearRect(0, 0, d.w, d.h); x.drawImage(T.before, 0, 0);
-      const g = makeCanvas(d.w, d.h); const gx = ctx2d(g);
-      drawGradient(gx, d.w, d.h, T.a, T.b, S.gradient);
-      if (d.selection && !S.ui.quickMask) { gx.globalCompositeOperation = 'destination-in'; gx.drawImage(d.selection, 0, 0); }
-      x.globalAlpha = S.gradient.opacity;
-      x.globalCompositeOperation = T.tgt.kind === 'mask' ? 'source-over' : (T.tgt.layer.lockAlpha ? 'source-atop' : gcoFor(S.gradient.mode));
-      if (T.tgt.kind === 'mask') {
-        // Verlauf als Maskenwerte: Luminanz → Alpha
-        const id = gx.getImageData(0, 0, d.w, d.h);
-        for (let i = 0; i < id.data.length; i += 4) { const v = (id.data[i] * 0.299 + id.data[i + 1] * 0.587 + id.data[i + 2] * 0.114) * id.data[i + 3] / 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = 255; id.data[i + 3] = v; }
-        gx.putImageData(id, 0, 0); x.clearRect(0, 0, d.w, d.h);
-      }
-      x.drawImage(g, 0, 0); x.restore();
-      if (T.tgt.layer) T.tgt.layer.touch(); else d.selRev++;
-      view.request();
+      renderGradientOp(d, T, true);
       break;
     }
     case 'shape': T.b = p; T.e = e; view.overlay(); break;
@@ -932,7 +949,7 @@ export function pointerUp(e) {
     case 'bgerase': commit('Hintergrund-Radiergummi'); break;
     case 'removeStroke': { const m = t.mask; import('./state.js').then((st) => st.EDIT.remove(m)).finally(() => { S.removeMask = null; view.overlay(); }); break; }
     case 'retouch': commit({ blur: 'Weichzeichner', sharpen: 'Scharfzeichner', smudge: 'Wischfinger', dodge: 'Abwedler', burn: 'Nachbelichter', sponge: 'Schwamm' }[t.mode]); break;
-    case 'gradient': if (dist(t.a, t.b) > 1) commit('Verlauf'); break;
+    case 'gradient': if (dist(t.a, t.b) > 1) { renderGradientOp(d, t, false); commit('Verlauf'); } break;
     case 'shape': finishShape(d, t, e); break;
     case 'pen': emit(); break;
     case 'pen-curv': commit('Ankerpunkt'); emit(); break;

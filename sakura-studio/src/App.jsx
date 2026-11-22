@@ -72,6 +72,7 @@ function Shell() {
 export default function App() {
   useEffect(() => {
     applyTheme();
+    import('./state.js').then((m) => m.setGpu(m.S.prefs.gpu === undefined ? 'auto' : m.S.prefs.gpu, m.S.prefs.dither !== false));
     setTimeout(() => import('./state.js').then((m) => { if (m.S.prefs.autoUpdate !== false) m.checkUpdates(true); }), 8000);
     import('./tools.js').then((m) => m.loadCustomTips());
     import('./state.js').then((m) => m.loadSavedPatterns());

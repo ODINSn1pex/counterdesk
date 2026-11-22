@@ -1,3 +1,4 @@
+import { GPU } from '../engine/doc.js';
 import { useEffect, useRef, useState } from 'react';
 import { S, emit, useStore, useCursor, setTool, doc, closeDoc, view, EDIT, L, SELECT, openDialog, startTransform, isAnime, initCrop } from '../state.js';
 import { fmtUnit } from './CanvasView.jsx';
@@ -169,7 +170,7 @@ export function DocTabs() {
     <div className="doc-tabs">
       {S.docs.map((d) => (
         <div key={d.id} title={d.filePath || d.name} className={'doc-tab' + (d.id === S.activeId ? ' active' : '')} onMouseDown={(e) => { if (e.button === 1) { closeDoc(d.id); return; } S.activeId = d.id; if (S.tool === 'crop') initCrop(); view.request(); emit(); }}>
-          <span>{d.name}{d.dirty ? ' *' : ''} bei {Math.round(d.zoom * 1000) / 10}% (RGB/8)</span>
+          <span>{d.name}{d.dirty ? ' *' : ''} bei {Math.round(d.zoom * 1000) / 10}% ({GPU.enabled ? 'RGB/32f · GPU' : 'RGB/8'})</span>
           <button className="x" onMouseDown={(e) => { e.stopPropagation(); closeDoc(d.id); }}><Icon name="close" size={12} /></button>
         </div>
       ))}

@@ -1,7 +1,7 @@
 {
   "name": "lumora",
   "productName": "Lumora",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "description": "Lumora – Bildbearbeitung",
   "author": "Lumora",
   "main": "electron/main.cjs",

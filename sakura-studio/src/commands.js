@@ -61,6 +61,8 @@ export const MENUS = [
         { label: 'Mehrere Größen (1x/2x/3x)…', run: ADV('exportMultiSize'), enabled: hasDoc },
         { label: 'Slices exportieren…', run: ADV('exportSlices'), enabled: () => doc() && (doc().slices || []).length > 0 },
         { label: 'Ebenenkompositionen in Dateien…', run: () => COMPS.exportAll(), enabled: () => doc() && (doc().comps || []).length > 0 },
+        { label: 'PNG 16 Bit (Gleitkomma-Pipeline)…', run: () => import('./state.js').then((m) => m.export16('png')), enabled: hasDoc },
+        { label: 'TIFF 16 Bit (Gleitkomma-Pipeline)…', run: () => import('./state.js').then((m) => m.export16('tiff')), enabled: hasDoc },
         { label: 'Als SVG…', run: ADV('exportSvg'), enabled: hasDoc },
         { label: 'Als PDF…', run: ADV('exportPdf'), enabled: hasDoc },
       ] },

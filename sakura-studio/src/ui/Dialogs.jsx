@@ -7,7 +7,7 @@ import { RawDialog } from './dialogs/RawDialog.jsx';
 import { FormDialog } from './dialogs/FormDialog.jsx';
 import { BrushSettingsDialog } from './dialogs/BrushSettings.jsx';
 import { ADJUSTMENTS, FILTERS, histogram, curveLut } from '../engine/filters.js';
-import { BLEND_MODES } from '../engine/doc.js';
+import { BLEND_MODES, GPU } from '../engine/doc.js';
 import { beginPreview, previewFilter, showOriginal, finishFilter, cancelPreview } from './dialogs/applyFilter.js';
 import { Num, Sel, Check, gradientCss } from './OptionsBar.jsx';
 import { ColorField } from './Panels.jsx';
@@ -589,6 +589,12 @@ function PrefsDialog({ dg }) {
             <h4>Leistung</h4>
             <Row label="Filtervorschau" hint="Bei großen Bildern wird die Vorschau verkleinert berechnet – das Ergebnis wird immer in voller Auflösung angewendet."><Check label="Schnelle Vorschau bei großen Bildern" value={p.fastPreview} onChange={set('fastPreview')} /></Row>
             <Row label="Grafikprozessor" hint="Änderung wird nach einem Neustart wirksam. Nur bei Darstellungsfehlern deaktivieren."><Check label="Hardwarebeschleunigung verwenden" value={p.hardwareAcceleration} onChange={(v) => { set('hardwareAcceleration')(v); if (window.native && window.native.setMainSetting) window.native.setMainSetting('hardwareAcceleration', v); }} /></Row>
+            <Row label="Rendering" hint={'Mischt Ebenen, Füllmethoden, Masken und Einstellungsebenen auf der Grafikkarte in 32-Bit-Gleitkomma – keine Rundungsfehler beim Stapeln von Korrekturen. Dithering verhindert Streifen in Verläufen. ' + (GPU.enabled ? 'Aktiv: ' + ((GPU.info && GPU.info.renderer) || 'GPU') : 'Nicht aktiv' + (GPU.error ? ' (' + GPU.error + ')' : ''))}>
+              <Sel value={p.gpu === undefined ? 'auto' : p.gpu ? 'on' : 'off'} width={260} options={[['auto', 'GPU 32-Bit-Gleitkomma: Automatisch'], ['on', 'GPU 32-Bit-Gleitkomma: Immer'], ['off', 'Aus (klassisch, 8 Bit)']]}
+                onChange={(v) => { const val = v === 'auto' ? undefined : v === 'on'; set('gpu')(val); import('../state.js').then((m) => m.setGpu(v === 'auto' ? 'auto' : v === 'on', p.dither !== false)); }} />
+              {GPU.info && GPU.info.software && <div className="hint">Hinweis: Es wurde nur ein Software-Renderer gefunden ({GPU.info.renderer}). „Automatisch“ nutzt dann das klassische Rendering, weil es schneller ist.</div>}
+              <Check label="Dithering (Ausgabe und Verläufe)" value={p.dither !== false} onChange={(v) => { set('dither')(v); set('ditherGradients')(v); import('../state.js').then((m) => m.setGpu(p.gpu === undefined ? 'auto' : p.gpu, v)); }} />
+            </Row>
             <Row label="KI-Freistellung" hint="Für „Motiv auswählen“, „Objektauswahl“ und „Hintergrund entfernen“. Läuft komplett lokal auf deinem PC.">
               <AiModelPicker />
             </Row>
@@ -821,7 +827,7 @@ function AboutDialog() {
       <div className="about">
         <Logo size={64} />
         <h2>Lumora</h2>
-        <div>Version 5.0.0 · Bildbearbeitung für Windows</div>
+        <div>Version 5.1.0 · Bildbearbeitung für Windows</div>
         <p>Ebenen, Masken, Auswahlen, Pinsel, Retusche, Text, Formen, Pfade, über 50 Korrekturen & Filter, PSD-Import/-Export und mehr.</p>
         <p className="muted">Arbeitsordner: Desktop\Lumora\Projekte · Einstellungen: Bearbeiten › Voreinstellungen (Strg+K)</p>
         <details className="licenses"><summary>Open-Source-Komponenten</summary>
@@ -839,6 +845,7 @@ function FeaturesDialog() {
   const groups = [
     ['Datei', 'Neu (Vorlagen), Öffnen (PNG, JPG, WebP, GIF, BMP, SVG, PSD, .lumora), Zuletzt geöffnet, Speichern als Projekt, PSD mit Ebenen speichern, Export PNG/JPG/WebP mit Qualität & Skalierung, Ebenen als Dateien exportieren, Platzieren, Drag & Drop, Drucken'],
     ['Entfernen & Freistellen', 'Markierte Bereiche mit KI entfernen (LaMa-Modell, lokal), Entfernen-Werkzeug zum Übermalen, Hintergrund entfernen als Maske, Motiv/Auswahl in neue Ebene ausschneiden oder kopieren, schwebende Aktionsleiste'],
+    ['Neu in 5.1 – Qualität', 'GPU-Rendering (WebGL2) mit 32-Bit-Gleitkomma-Puffern für Ebenen, alle 27 Füllmethoden, Masken, Schnittmasken, Gruppen, Fülloptionen und Einstellungsebenen (Korrekturen über 65³-Farbtabellen in Gleitkomma); Ausgabe mit Dithering; Verläufe in Gleitkomma mit Dithering; Export als PNG und TIFF mit 16 Bit pro Kanal'],
     ['Neu in 5.0', 'Camera-Raw-Filter (auch als Einstellungsebene), Objektivkorrektur (Verzeichnung, Farbsäume, Vignette), Haut glätten, Rundungszeichenstift, Ansicht drehen, Glyphen-Bedienfeld, Kerning/Kapitälchen/Schriftbreite, Silbentrennung, PDF-Import, PSB-Export, Skripte ausführen, Airbrush und Stiftneigung, Farbprofile (sRGB, Display P3, Adobe RGB) zuweisen, umwandeln und als ICC einbetten, Update-Prüfung, lokales Fehlerprotokoll, KI-Modelle bei Bedarf laden (Kompakt-Installer)'],
     ['Neu in 4.0', 'Pinsel-Engine (F5) mit Struktur, Dualem Pinsel, Farb- und Transfer-Jitter, Symmetrie/Mandala und Misch-Pinsel; Ebenenstile Abgeflachte Kante und Relief, Glanz, Schein nach innen, Musterüberlagerung, mehrere Konturen/Schatten, globaler Lichteinfall; Fülloptionen „Farbbereich“; 9 zusätzliche exakte Füllmethoden (Linear nachbelichten, Strahlendes/Lineares Licht, Lichtpunkt, Hart mischen, Subtrahieren, Dividieren, Hellere/Dunklere Farbe); Ausbessern-Werkzeug, Inhaltsbasiert verschieben und skalieren, Generativ erweitern (lokale KI), Himmel austauschen, Hochskalieren; Absatztext mit Blocksatz, Text verkrümmen, Zeichen-/Absatzformate, Rechtschreibprüfung, Suchen & Ersetzen; Vektormasken, Formen kombinieren, Eckradien einzeln; Photomerge, HDR-Zusammenfügung, Ebenen automatisch ausrichten/überblenden (Fokus-Stacking); Import von .pat, .asl, .grd, .aco; Export als SVG, PDF, mehrere Größen und Slices; Farbaufnahme-, Zählungs-, Anmerkungs-, Slice- und Rahmenwerkzeug; Ebenenkompositionen; Stile-Bedienfeld; Tutorial mit 61 Schritten'],
     ['Neu in 3.0', 'Echte RAW-Entwicklung (LibRaw: Weißabgleich, Belichtung, Lichter, Rauschreduzierung, Demosaicing), Photoshop-Pinsel (.abr), Zeichenflächen, CMYK-TIFF-Export und TIFF-Import, Zeitleiste mit GIF-/MP4-/WebM-Export, generative Füllung (OpenAI, eigener Schlüssel), Plugin-Schnittstelle, Funktionslexikon (F1)'],
